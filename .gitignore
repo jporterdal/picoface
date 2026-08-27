@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Notebook
+.ipynb_checkpoints/
+
+# Tooling / editors
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Dataset Forge output (large generated artifacts)
+dataset_forge/output/
+
+# Local-only draft capability specs, staged for copying into future
+# phase changes as they're created — not part of the tracked plan.
+openspec/draft-specs/
