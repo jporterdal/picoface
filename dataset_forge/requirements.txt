@@ -1,0 +1,4 @@
+# Dataset Forge dependencies — kept separate from the installable picoface
+# package so its (potentially heavier/unrestricted) deps never leak into
+# `pip install picoface`. Populated as Dataset Forge capability is built
+# out in a later phase.
