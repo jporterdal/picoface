@@ -4,7 +4,7 @@ Phase 1 delivered `load_dataset()` and an in-memory stub-dataset generator, but 
 
 ## What Changes
 
-- Add `build_classifier(num_classes, input_shape)` to `src/picoface/classifier.py`: constructs a small CNN sized to the given class count and image shape, returning a trainable model object, with no `nn.Module` authoring exposed to the caller.
+- Add `build_classifier(data)` (plus a `build_classifier_from_shape(num_classes, input_shape)` variant for when no `Dataset` is yet available) to `src/picoface/classifier.py`: constructs a small CNN sized to the dataset's (or explicitly given) class count and image shape, returning a trainable model object, with no `nn.Module` authoring exposed to the caller. Both validate their input shape against the architecture's minimum viable size at build time.
 - Add `train(model, data)`: runs the full training loop (forward/loss/backward/optimizer step/epoch iteration) against a `Dataset` (real or stub), returning a training-history object. Logs wall-clock training time to start giving early visibility into the "seconds-to-minutes on old CPU" budget (per roadmap risk, measured from Phase 2 onward).
 - Add `evaluate(model, data)`: returns an accuracy metric on held-out data.
 - Add `predict(model, image)`: returns a class label for a single new image.
