@@ -72,9 +72,9 @@ Each phase assumes all prior phases are complete. A disposable stub dataset is u
 
 | Phase | Name | Capability spec | Status |
 |---|---|---|---|
-| 0 | Scaffolding | `packaging` (partial) | **In progress** — `openspec/changes/picoface-phase0` |
-| 1 | Data contract + stub dataset | `data-contract` | Not started |
-| 2 | Classifier arm (Arm 1) plumbing | `shape-classifier` | Not started |
+| 0 | Scaffolding | `packaging` (partial) | **Done** — archived at `openspec/changes/archive/2026-08-28-picoface-phase0` |
+| 1 | Data contract + stub dataset | `data-contract` | **Done** — archived at `openspec/changes/archive/2026-08-31-picoface-phase1` |
+| 2 | Classifier arm (Arm 1) plumbing | `shape-classifier` | **In progress** — `openspec/changes/picoface-phase2` |
 | 3 | Generator arm (Arm 2) plumbing | `shape-generator` | Not started |
 | 4 | Arms linkage | `capstone-linkage` | Not started |
 | 5 | Dataset Forge (Arm 3) + real content decisions | `dataset-forge` | Not started |
