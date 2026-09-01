@@ -10,6 +10,12 @@ First-year non-CS students currently have no lightweight way to build and train 
 
 (Project renamed from `tinyface` to `picoface` on 2026-08-27 — `tinyface` collides with an existing, actively-maintained PyPI package. Repo, import name, and PyPI distribution name are all `picoface`.)
 
+## Student-Visible Scope
+
+Students only ever receive the finished Phase 7 deliverable: the packaged `picoface` library, its student-facing docs, and the per-arm template notebooks. They never see the phase-by-phase development history, the stub dataset (a pre-Phase-5 plumbing-validation aid, not real content), work-in-progress hyperparameter choices, or public functions kept only for API completeness rather than pedagogical use.
+
+A function existing in the public API does not imply it appears in student-facing docs or notebooks — Phase 7 decides, per arm, what's actually walked through. Code that exists for developer/OpenSpec sequencing reasons rather than pedagogical ones only needs to work correctly, not be polished for a student audience, unless a later phase decides to surface it to students.
+
 ## Three-Arm Architecture
 
 - **Arm 1 (student-facing): classifier** — recognize basic shapes/smiley face in tiny images. `build_classifier()`, `train()`, `evaluate()`, `predict()`, plus viz helpers.
@@ -97,6 +103,11 @@ Generic `.npz` schema (images/labels/`classes.json`, parameterized by H/W/C/num_
 ### Phase 3 — Generator arm (Arm 2) plumbing
 `build_autoencoder()` → `build_vae()`, `train()`, `generate()`, latent-space viz; proven against the stub dataset. Resolves VAE hyperparameter defaults.
 
+- `latent_dim` is fixed at 2 (not student-configurable for MVP) — keeps `show_latent_space()` a direct scatter plot with no projection step (PCA/t-SNE), avoiding a new dependency beyond `torch`/`numpy`/`matplotlib`.
+- The reconstruction/KL-divergence loss weight (β) is a fixed internal constant, not a student-facing parameter — placeholder value tuned against the stub dataset, flagged for experimental validation against real data in Phase 6 (see "Student-Visible Scope" above — students never see this constant or its tuning history either way).
+- `generate()` is VAE-only. Calling it with a model from `build_autoencoder()` raises an explicit error naming the AE/VAE mismatch, rather than failing on a missing sampling method deep in `_internals` — same pattern as Phase 2's `ShapeError`.
+- `build_autoencoder()` is kept at function/signature parity with `build_vae()` (same call shape, same arm) for API consistency, but per Student-Visible Scope only needs to work correctly — it does not need notebook-ready polish. Phase 7 decides whether the AE step is actually walked through in the arm's template notebook or the notebook goes straight to `build_vae()`.
+
 ### Phase 4 — Arms linkage
 `classify_generated()`, `activation_maximize()`, consuming trained models from Phases 2–3. Resolves what the capstone tie-in exercise looks like.
 
@@ -104,7 +115,7 @@ Generic `.npz` schema (images/labels/`classes.json`, parameterized by H/W/C/num_
 THIS is where shape taxonomy, resolution/color depth, and noise/augmentation policy actually get decided and built, unrestricted hardware/libs, exports the real dataset in the Phase 1 contract format.
 
 ### Phase 6 — End-to-end integration & tuning
-Swap real dataset in for the stub across Arms 1/2/linkage, tune for "seconds-to-minutes on old CPU," set/verify an accuracy/quality bar.
+Swap real dataset in for the stub across Arms 1/2/linkage, tune for "seconds-to-minutes on old CPU," set/verify an accuracy/quality bar. Also revisits Phase 3's placeholder VAE hyperparameters (β KL-divergence weight, `latent_dim=2`) against real data — the stub-dataset values were never meant to be final.
 
 ### Phase 7 — Student docs & MVP packaging
 Docs stating explicit constraints, template notebooks per arm plus the capstone, finalize distribution mechanism (pip/zip/Colab clone).
@@ -123,4 +134,6 @@ Docs stating explicit constraints, template notebooks per arm plus the capstone,
 - Exact resolution and color depth — resolved in Phase 5, guided by "as small as possible while still recognizable to both a human and the classifier."
 - Noise/augmentation policy for Dataset Forge — resolved in Phase 5.
 - Concrete accuracy/quality bar for the reference implementation — resolved in Phase 6, measured against the real dataset.
+- VAE hyperparameter placeholders (β KL-divergence weight, `latent_dim=2`) set in Phase 3 against the stub dataset — revisited in Phase 6 against real data.
+- Whether Phase 3's `build_autoencoder()` step is walked through in the generator arm's template notebook, or the notebook goes straight to `build_vae()` — resolved in Phase 7.
 - Final distribution channel (PyPI vs. zip vs. Colab git-clone) — resolved in Phase 7; the packaging structure already supports all three, so this is a low-stakes choice deferred on purpose.
