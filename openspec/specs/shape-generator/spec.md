@@ -1,8 +1,9 @@
 ## Purpose
 
-The student-assembled generative arm: building, training, and generating from
-an autoencoder-to-VAE progression, plus latent-space visualization, via
-simple function calls, within an old-CPU time budget.
+The student's model: a supervised VAE that, after one `train()` call on
+labeled data, both classifies and generates images, plus an optional
+reconstruction-only autoencoder, via simple function calls, within an
+old-CPU time budget.
 
 ## Requirements
 

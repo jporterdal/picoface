@@ -7,8 +7,11 @@ This module is arm-neutral: it imports nothing from the public arm modules or
 
 Every model object in the project subclasses `_Model`, which supplies the one
 thing the shared training loop cannot know (`training_step`, i.e. the loss) and
-declares optional capabilities (`classify`, `sample`, `encode_mu`) that the
-verbs check before use.
+declares optional capabilities (`classify`, `sample`) that the verbs check
+before use. `train()` also tells each model where it is in training
+(`on_epoch_start`), so a model can schedule its own loss terms, and lets each
+model set its own per-parameter learning rates (`optimizer_param_groups`) and
+constrain its parameters after every optimizer step (`on_step_end`).
 """
 
 import time
@@ -28,10 +31,14 @@ class TrainingHistory:
 
     `loss` is the model's total per-epoch loss. The other lists are populated
     only for models that report the matching metric (empty otherwise):
-    `reconstruction_loss`/`kl_loss` for autoencoders/VAEs,
-    `classification_loss`/`accuracy` for models with a classification branch.
+    `reconstruction_loss` (per-pixel mean squared error) for autoencoders and
+    VAEs; `kl_loss` (KL divergence per pixel value, i.e. the per-image KL
+    divided by height x width x channels), `classification_loss`, `accuracy`,
+    `kl_weight` (the annealed weight applied to `kl_loss`), and the learned
+    `reconstruction_log_var`/`classification_log_var` task weights for VAEs.
     `accuracy` is the mean per-batch training accuracy — a training-time
-    indicator, not held-out performance.
+    indicator, not held-out performance. A VAE's total `loss` includes the
+    learned log-variance terms and can therefore be negative.
     """
 
     loss: list[float] = field(default_factory=list)
@@ -40,6 +47,9 @@ class TrainingHistory:
     kl_loss: list[float] = field(default_factory=list)
     classification_loss: list[float] = field(default_factory=list)
     accuracy: list[float] = field(default_factory=list)
+    kl_weight: list[float] = field(default_factory=list)
+    reconstruction_log_var: list[float] = field(default_factory=list)
+    classification_log_var: list[float] = field(default_factory=list)
 
 
 class _Model(nn.Module):
@@ -68,6 +78,31 @@ class _Model(nn.Module):
         """
         raise NotImplementedError
 
+    def on_epoch_start(self, epoch: int, total_epochs: int) -> None:
+        """Called by `train()` before each epoch (`epoch` counts from 0).
+
+        No-op by default. A model whose loss depends on training progress
+        (e.g. an annealed term) overrides this; progress is relative to the
+        caller's `epochs`, so schedules complete within any run length.
+        """
+
+    def optimizer_param_groups(self, learning_rate: float) -> list[dict]:
+        """Parameter groups for `train()`'s optimizer, given the caller's rate.
+
+        One group of every parameter at `learning_rate` by default. A model
+        that trains some parameters at a different rate overrides this, setting
+        that rate relative to `learning_rate`; every parameter must appear in
+        exactly one group.
+        """
+        return [{"params": list(self.parameters()), "lr": learning_rate}]
+
+    def on_step_end(self) -> None:
+        """Called by `train()` after every optimizer step.
+
+        No-op by default. A model with constraints on its parameters (e.g. a
+        lower bound) overrides this to enforce them in place.
+        """
+
     def check_data(self, data) -> None:
         """Reject `data` whose image shape or class count doesn't match this model."""
         image_shape = tuple(data.images.shape[1:])
@@ -91,10 +126,6 @@ class _Model(nn.Module):
         """`n` newly sampled images as an NCHW float tensor in [0, 1]."""
         raise NotImplementedError
 
-    def encode_mu(self, x: torch.Tensor) -> torch.Tensor:
-        """The latent mean for a preprocessed NCHW float batch."""
-        raise NotImplementedError
-
 
 def _require_model(model, verb: str) -> None:
     if not isinstance(model, _Model):
@@ -114,9 +145,8 @@ def _require_capability(model, capability: str, verb: str, error_cls=CapabilityE
 
 
 _CAPABILITY_PHRASES = {
-    "classify": "classify images",
+    "classify": "classify images (build_autoencoder() models cannot)",
     "sample": "generate images (only build_vae() models can)",
-    "latent_mean": "report a latent mean (only build_vae() models can)",
 }
 
 
@@ -169,12 +199,13 @@ def train(
     dataset = TensorDataset(torch.from_numpy(np.asarray(data.images)), labels_tensor)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.optimizer_param_groups(learning_rate))
 
     history = TrainingHistory()
     start_time = time.monotonic()
 
-    for _epoch in range(epochs):
+    for epoch in range(epochs):
+        model.on_epoch_start(epoch, epochs)
         epoch_loss = 0.0
         epoch_metrics: dict[str, float] = {}
         num_batches = 0
@@ -185,6 +216,7 @@ def train(
             loss, metrics = model.training_step(inputs, batch_labels.to(device))
             loss.backward()
             optimizer.step()
+            model.on_step_end()
 
             epoch_loss += loss.item()
             for name, value in metrics.items():
@@ -201,8 +233,12 @@ def train(
 
 
 def evaluate(model, data) -> float:
-    """Return classification accuracy (0 to 1) of `model` on `data`."""
-    _require_capability(model, "classify", "evaluate")
+    """Return classification accuracy (0 to 1) of `model` on `data`.
+
+    Raises `GeneratorError` (a `CapabilityError`) for a model that cannot
+    classify, such as one built by `build_autoencoder()`.
+    """
+    _require_capability(model, "classify", "evaluate", error_cls=GeneratorError)
     model.check_data(data)
     model.eval()
 
@@ -215,8 +251,12 @@ def evaluate(model, data) -> float:
 
 
 def predict(model, image: np.ndarray) -> str:
-    """Return the predicted class name for a single `image`."""
-    _require_capability(model, "classify", "predict")
+    """Return the predicted class name for a single `image`.
+
+    Raises `GeneratorError` (a `CapabilityError`) for a model that cannot
+    classify, such as one built by `build_autoencoder()`.
+    """
+    _require_capability(model, "classify", "predict", error_cls=GeneratorError)
     model.eval()
 
     with torch.no_grad():
@@ -240,12 +280,3 @@ def generate(model, n: int) -> np.ndarray:
     images = decoded.permute(0, 2, 3, 1).numpy() * 255.0
     return np.clip(images, 0, 255).astype(np.uint8)
 
-
-def _latent_mean(model, images: np.ndarray | torch.Tensor) -> np.ndarray:
-    """Return the model's latent mean (not a sampled z) for `images`."""
-    _require_capability(model, "latent_mean", "show_latent_space", error_cls=GeneratorError)
-    tensor = _preprocess_images(images, model)
-    model.eval()
-    with torch.no_grad():
-        mu = model.encode_mu(tensor)
-    return mu.numpy()

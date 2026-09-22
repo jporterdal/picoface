@@ -1,4 +1,4 @@
-"""Internal encoder/decoder architecture, VAE machinery, and classification head for the generator arm.
+"""Internal encoder/decoder, VAE machinery, and latent classification head for the generator arm.
 
 Not part of the public API — `picoface.generator` wraps everything here
 behind named, student-facing functions. Nothing exported from this module
@@ -12,32 +12,34 @@ from torch import nn
 
 from picoface._internals.model_api import _Model
 
-# Fixed 2D latent space (Decision 2): keeps `show_latent_space()` a direct
-# (x, y) scatter with no dimensionality-reduction step / new dependency.
-LATENT_DIM = 2
+# Latent dimensionality (phase3c Decision 2): no longer pinned to 2 now that
+# `show_latent_space()` is gone and classification is routed through the
+# latent. Provisional — see the phase3c diagnostics record; Phase 6 owns the
+# final value.
+LATENT_DIM = 8
 
-# KL-divergence weight for the VAE loss (Decision 3): a guess tuned
-# qualitatively against stub-dataset reconstructions (see tasks.md 5.2 for
-# the tuning record) — not validated against real data. Flagged in
-# openspec/ROADMAP.md for revisiting in Phase 6. Deliberately kept small:
-# with mean-reduced per-pixel MSE, recon loss on the stub dataset sits in
-# the ~0.01-0.03 range, and larger BETA values (0.1, 1.0) pushed KL toward
-# collapse (near zero) faster and further than this value does, without
-# improving reconstruction — so this stays a light regularizer rather than
-# the dominant loss term.
-BETA = 0.01
+# Fraction of training over which the KL weight ramps linearly from 0 to 1
+# (phase3c Decision 3). The end point, 1, is the ELBO weight given the per-pixel loss
+# scale (phase3c Decision 5) and is not a tuning knob; only this ramp length is.
+# Provisional; Phase 6 owns the value.
+KL_ANNEAL_FRACTION = 0.5
 
-# Weight on the cross-entropy classification loss in the joint objective:
-# loss = reconstruction (+ BETA * KL for the VAE) + CLASSIFICATION_WEIGHT * CE.
-# Not student-facing. Head sits on the shared conv-trunk features, not on the
-# latent: in a spike on synthetic shapes (4 classes, varied position/size),
-# that gave the best classifier without hurting reconstruction, whereas a head
-# on `mu` clustered the latent but cost ~35% reconstruction. Accuracy and
-# reconstruction were insensitive to this weight across 0.1-10 (Adam
-# normalizes per-parameter, so CE's larger raw scale doesn't starve the
-# decoder), so 1.0 is the plain default. Validated on synthetic data only —
-# flagged in openspec/ROADMAP.md for revisiting in Phase 6 with BETA.
-CLASSIFICATION_WEIGHT = 1.0
+# Floor on both learned task log-variances (phase3c Decision 4): caps how large a
+# task's weight can grow, bounding the lower-loss-earns-higher-weight
+# starvation dynamic. Both variances live on per-pixel / per-label scales, so
+# the floor means the same thing at every image resolution. Enforced on the
+# stored parameters after every optimizer step (`_VAE.on_step_end`), not only
+# on the values the loss reads. Provisional; Phase 6 owns the value.
+LOG_VAR_FLOOR = -6.0
+
+# Learning-rate multiplier for both learned task log-variances, relative to the
+# rate passed to `train()` (phase3c Decision 4). Adam moves a parameter by about
+# its learning rate per step, so at the shared rate the log-variances barely
+# leave their initial value in a default-length run. 10 is deliberately
+# conservative: it reaches equilibrium in about 340 steps, which is a few epochs
+# on real data but not on the small stub. Provisional; Phase 6 retunes it once
+# the real dataset's steps per epoch are known.
+LOG_VAR_LR_MULTIPLIER = 10
 
 _HEAD_HIDDEN_SIZE = 32
 
@@ -134,10 +136,10 @@ class _Decoder(nn.Module):
         return self.sigmoid(self.deconv2(x))
 
 
-def _build_classification_head(flatten_dim: int, num_classes: int) -> nn.Sequential:
-    """Small MLP head (mirrors the classifier arm's FC head) on the trunk features."""
+def _build_classification_head(latent_dim: int, num_classes: int) -> nn.Sequential:
+    """Small MLP head on the latent vector (phase3c Decision 1)."""
     return nn.Sequential(
-        nn.Linear(flatten_dim, _HEAD_HIDDEN_SIZE),
+        nn.Linear(latent_dim, _HEAD_HIDDEN_SIZE),
         nn.ReLU(),
         nn.Linear(_HEAD_HIDDEN_SIZE, num_classes),
     )
@@ -152,67 +154,71 @@ def _classification_terms(
     return ce, accuracy
 
 
+def _kl_weight(epoch: int, total_epochs: int) -> float:
+    """KL weight for `epoch` (from 0): a linear ramp from 0 to 1 over the first
+    `KL_ANNEAL_FRACTION` of training, then 1 (phase3c Decision 3). Always 1 on the
+    final epoch, whatever `total_epochs` is.
+    """
+    if total_epochs <= 1:
+        return 1.0
+    progress = epoch / (total_epochs - 1)
+    return min(1.0, progress / KL_ANNEAL_FRACTION)
+
+
 def _build_decoder(latent_dim: int, output_shape: tuple[int, int, int]) -> "_Decoder":
     return _Decoder(latent_dim, output_shape)
 
 
 class _Autoencoder(_Model):
-    """Plain (non-variational) encoder/decoder: a pedagogical step toward the VAE.
+    """Plain (non-variational) encoder/decoder, reconstruction-only.
 
-    Two parallel branches off the shared conv trunk: a deterministic latent
-    projection feeding the decoder, and a classification head.
+    Optional, and not a prerequisite for the VAE (phase3c Decision 7): it neither
+    classifies nor samples, and ignores a dataset's labels during training.
     """
 
-    capabilities = frozenset({"classify"})
+    capabilities = frozenset()
     built_by = "build_autoencoder()"
 
     def __init__(
         self,
         input_shape: tuple[int, int, int],
-        num_classes: int,
         shape_error_cls: type[Exception],
         latent_dim: int = LATENT_DIM,
     ):
         super().__init__()
         self.input_shape = input_shape
-        self.num_classes = num_classes
-        self.class_names = [f"class_{i}" for i in range(num_classes)]
         self.shape_error_cls = shape_error_cls
         self.latent_dim = latent_dim
         self.trunk = _ConvEncoderTrunk(input_shape)
         self.to_latent = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.decoder = _build_decoder(latent_dim, input_shape)
-        self.head = _build_classification_head(self.trunk.flatten_dim, num_classes)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.trunk(x)
-        return self.decoder(self.to_latent(features)), self.head(features)
-
-    def classify(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.trunk(x))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.to_latent(self.trunk(x)))
 
     def training_step(
         self, inputs: torch.Tensor, labels: torch.Tensor
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        recon, logits = self(inputs)
-        recon_loss = nn.functional.mse_loss(recon, inputs)
-        cls_loss, accuracy = _classification_terms(logits, labels)
-        loss = recon_loss + CLASSIFICATION_WEIGHT * cls_loss
-        return loss, {
-            "reconstruction_loss": recon_loss.item(),
-            "classification_loss": cls_loss.item(),
-            "accuracy": accuracy,
-        }
+        recon_loss = nn.functional.mse_loss(self(inputs), inputs)
+        return recon_loss, {"reconstruction_loss": recon_loss.item()}
 
 
 class _VAE(_Model):
-    """Variational autoencoder: probabilistic latent space + reparameterization.
+    """Supervised variational autoencoder: one model that classifies and generates.
 
-    Two parallel branches off the shared conv trunk: a generative branch
-    (`mu`/`logvar` -> reparameterize -> decoder) and a classification head.
+    The reparameterized latent sample `z` feeds both the decoder and the
+    classification head (phase3c Decision 1), so class supervision shapes the
+    distribution `sample()` draws from; inference (`classify`) reads `mu`
+    instead, for deterministic predictions.
+
+    The loss is a per-pixel ELBO plus classification (phase3c Decisions 3-5):
+    reconstruction is the per-pixel Gaussian negative log-likelihood with a
+    learned noise scale, classification is cross-entropy with a learned
+    uncertainty (Kendall et al., 2018), and the per-pixel KL divergence is
+    weighted by an annealed schedule ending at 1.
     """
 
-    capabilities = frozenset({"classify", "sample", "latent_mean"})
+    capabilities = frozenset({"classify", "sample"})
     built_by = "build_vae()"
 
     def __init__(
@@ -223,16 +229,46 @@ class _VAE(_Model):
         latent_dim: int = LATENT_DIM,
     ):
         super().__init__()
+        height, width, channels = input_shape
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.class_names = [f"class_{i}" for i in range(num_classes)]
         self.shape_error_cls = shape_error_cls
         self.latent_dim = latent_dim
+        self.num_pixel_values = height * width * channels
         self.trunk = _ConvEncoderTrunk(input_shape)
         self.fc_mu = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.decoder = _build_decoder(latent_dim, input_shape)
-        self.head = _build_classification_head(self.trunk.flatten_dim, num_classes)
+        self.head = _build_classification_head(latent_dim, num_classes)
+        # Learned task log-variances (phase3c Decision 4): per-pixel reconstruction
+        # noise and classification uncertainty.
+        self.reconstruction_log_var = nn.Parameter(torch.zeros(()))
+        self.classification_log_var = nn.Parameter(torch.zeros(()))
+        # Full ELBO weight until `train()` starts a schedule.
+        self.kl_weight = 1.0
+
+    def on_epoch_start(self, epoch: int, total_epochs: int) -> None:
+        self.kl_weight = _kl_weight(epoch, total_epochs)
+
+    def _log_vars(self) -> list[nn.Parameter]:
+        return [self.reconstruction_log_var, self.classification_log_var]
+
+    def optimizer_param_groups(self, learning_rate: float) -> list[dict]:
+        log_var_ids = {id(p) for p in self._log_vars()}
+        others = [p for p in self.parameters() if id(p) not in log_var_ids]
+        return [
+            {"params": others, "lr": learning_rate},
+            {"params": self._log_vars(), "lr": learning_rate * LOG_VAR_LR_MULTIPLIER},
+        ]
+
+    def on_step_end(self) -> None:
+        # Floor the stored log-variances, not just the values the loss reads
+        # (phase3c Decision 4): a parameter left below the floor would get zero
+        # gradient and could not recover if its task loss rose again.
+        with torch.no_grad():
+            for log_var in self._log_vars():
+                log_var.clamp_(min=LOG_VAR_FLOOR)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.trunk(x)
@@ -246,36 +282,50 @@ class _VAE(_Model):
     def forward(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        features = self.trunk(x)
-        mu, logvar = self.fc_mu(features), self.fc_logvar(features)
+        mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decoder(z), mu, logvar, self.head(features)
+        return self.decoder(z), mu, logvar, self.head(z)
 
     def classify(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.trunk(x))
+        return self.head(self.encode_mu(x))
 
     def encode_mu(self, x: torch.Tensor) -> torch.Tensor:
         return self.encode(x)[0]
 
     def sample(self, n: int) -> torch.Tensor:
-        """Draw `n` vectors from N(0, I) in the fixed latent space and decode them."""
+        """Draw `n` vectors from N(0, I) in the latent space and decode them."""
         return self.decoder(torch.randn(n, self.latent_dim))
 
     def training_step(
         self, inputs: torch.Tensor, labels: torch.Tensor
     ) -> tuple[torch.Tensor, dict[str, float]]:
         recon, mu, logvar, logits = self(inputs)
-        recon_loss = nn.functional.mse_loss(recon, inputs)
-        kl_loss = -0.5 * torch.mean(
+
+        # Per-pixel scale throughout (phase3c Decision 5): mean-reduced squared error,
+        # and the per-image KL divided by the number of pixel values, so
+        # reconstruction + KL is the negative ELBO / D up to a constant.
+        mse = nn.functional.mse_loss(recon, inputs)
+        kl_per_image = -0.5 * torch.mean(
             torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         )
-        cls_loss, accuracy = _classification_terms(logits, labels)
-        loss = recon_loss + BETA * kl_loss + CLASSIFICATION_WEIGHT * cls_loss
+        kl = kl_per_image / self.num_pixel_values
+        ce, accuracy = _classification_terms(logits, labels)
+
+        # Kept at or above LOG_VAR_FLOOR by `on_step_end`.
+        recon_log_var = self.reconstruction_log_var
+        cls_log_var = self.classification_log_var
+        recon_term = mse / (2 * recon_log_var.exp()) + 0.5 * recon_log_var
+        cls_term = ce / cls_log_var.exp() + 0.5 * cls_log_var
+
+        loss = recon_term + cls_term + self.kl_weight * kl
         return loss, {
-            "reconstruction_loss": recon_loss.item(),
-            "kl_loss": kl_loss.item(),
-            "classification_loss": cls_loss.item(),
+            "reconstruction_loss": mse.item(),
+            "kl_loss": kl.item(),
+            "classification_loss": ce.item(),
             "accuracy": accuracy,
+            "kl_weight": self.kl_weight,
+            "reconstruction_log_var": recon_log_var.item(),
+            "classification_log_var": cls_log_var.item(),
         }
 
 
@@ -302,9 +352,9 @@ def _validate_decode_shape(model: nn.Module, input_shape, shape_error_cls: type[
 
 
 def _build_autoencoder(
-    input_shape: tuple[int, int, int], num_classes: int, shape_error_cls: type[Exception]
+    input_shape: tuple[int, int, int], shape_error_cls: type[Exception]
 ) -> "_Autoencoder":
-    model = _Autoencoder(input_shape, num_classes, shape_error_cls, LATENT_DIM)
+    model = _Autoencoder(input_shape, shape_error_cls, LATENT_DIM)
     _validate_decode_shape(model, input_shape, shape_error_cls)
     return model
 

@@ -1,12 +1,10 @@
 """Visualization helpers: plot results without writing matplotlib code directly."""
 
 import matplotlib.pyplot as plt
-import numpy as np
 
-from picoface._internals.model_api import TrainingHistory, _latent_mean
-from picoface.datasets import Dataset
+from picoface._internals.model_api import TrainingHistory
 
-__all__ = ["plot_training_history", "show_latent_space"]
+__all__ = ["plot_training_history"]
 
 
 def plot_training_history(history: TrainingHistory):
@@ -35,23 +33,3 @@ def plot_training_history(history: TrainingHistory):
     ax_loss.set_title("Training Loss")
     return fig
 
-
-def show_latent_space(vae_model, data: Dataset):
-    """Scatter-plot a trained VAE's 2D latent encoding of `data`, colored by class.
-
-    Plots the encoder's mean (`mu`), not a stochastic sample, for a stable,
-    reproducible plot. Raises `GeneratorError` if `vae_model` was built by
-    `build_autoencoder()` instead of `build_vae()`.
-    """
-    points = _latent_mean(vae_model, data.images)
-    labels = np.asarray(data.labels)
-
-    fig, ax = plt.subplots()
-    for class_idx, class_name in enumerate(data.class_names):
-        mask = labels == class_idx
-        ax.scatter(points[mask, 0], points[mask, 1], label=class_name)
-    ax.set_xlabel("z[0]")
-    ax.set_ylabel("z[1]")
-    ax.set_title("Latent Space")
-    ax.legend()
-    return fig

@@ -3,6 +3,8 @@ import matplotlib
 matplotlib.use("Agg")
 
 import pytest
+import torch
+from _splits import ACCURACY_N_PER_CLASS, train_and_held_out
 
 from picoface._internals.stub_data import make_stub_dataset
 from picoface.classifier import (
@@ -17,28 +19,30 @@ from picoface.viz import plot_training_history
 
 
 def test_build_train_evaluate_end_to_end():
-    data = make_stub_dataset(n_per_class=8, height=16, width=16, channels=3)
+    torch.manual_seed(0)
+    data, held_out = train_and_held_out(n_per_class=ACCURACY_N_PER_CLASS)
 
     model = build_classifier(data)
     history = train(model, data)
-    accuracy = evaluate(model, data)
+    accuracy = evaluate(model, held_out)
 
     assert len(history.loss) == 10
-    assert 0.0 <= accuracy <= 1.0
+    assert accuracy > 0.8  # 2 classes; observed 1.0
 
 
 def test_build_classifier_from_shape_equivalent_to_build_classifier():
-    data = make_stub_dataset(
-        n_per_class=8, height=16, width=16, channels=3, class_names=["a", "b"]
+    torch.manual_seed(0)
+    data, held_out = train_and_held_out(
+        n_per_class=ACCURACY_N_PER_CLASS, height=16, width=16, channels=3, class_names=["a", "b"]
     )
 
     model = build_classifier_from_shape(num_classes=len(data.class_names), input_shape=(16, 16, 3))
 
     history = train(model, data)
-    accuracy = evaluate(model, data)
+    accuracy = evaluate(model, held_out)
 
     assert len(history.loss) == 10
-    assert 0.0 <= accuracy <= 1.0
+    assert accuracy > 0.8  # 2 classes; observed 1.0
 
 
 def test_predict_returns_class_name():
@@ -68,8 +72,9 @@ def test_training_wall_clock_under_generous_ceiling():
     ],
 )
 def test_shape_agnostic(height, width, channels, class_names):
-    data = make_stub_dataset(
-        n_per_class=6,
+    torch.manual_seed(0)
+    data, held_out = train_and_held_out(
+        n_per_class=ACCURACY_N_PER_CLASS,
         height=height,
         width=width,
         channels=channels,
@@ -77,11 +82,11 @@ def test_shape_agnostic(height, width, channels, class_names):
     )
 
     model = build_classifier(data)
-    history = train(model, data, epochs=2)
-    accuracy = evaluate(model, data)
+    history = train(model, data)
+    accuracy = evaluate(model, held_out)
 
-    assert len(history.loss) == 2
-    assert 0.0 <= accuracy <= 1.0
+    assert len(history.loss) == 10
+    assert accuracy > 1 / len(class_names) + 0.3
 
 
 def test_build_classifier_from_shape_rejects_too_small_input():

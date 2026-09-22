@@ -1,16 +1,20 @@
-"""Build, train, and generate from an autoencoder-to-VAE progression of image models.
+"""Build and train one supervised model that both classifies and generates images.
 
-No `nn.Module` authoring, no hand-written training loop: `build_autoencoder()`
-or `build_vae()` constructs a model sized to your data, `train()` runs the
-full training loop, and `generate()` samples new images from a trained VAE —
-all via plain function calls. `train()` and `generate()` are the same
-model-agnostic functions used elsewhere in the library. GAN-based generation
-is a possible future extension, not part of this library.
+No `nn.Module` authoring, no hand-written training loop: `build_vae()`
+constructs a model sized to your data, a single `train()` call teaches it
+from labeled images, and the trained model then serves two workflows —
+`evaluate()`/`predict()` classify images, and `generate()` samples new ones.
+`train()`, `evaluate()`, `predict()`, and `generate()` are the same
+model-agnostic functions used elsewhere in the library.
+
+`build_autoencoder()` is an optional, reconstruction-only model kept for
+completeness; it is not a step on the way to `build_vae()`. GAN-based
+generation is a possible future extension, not part of this library.
 """
 
 from picoface._internals.errors import BaseShapeError, CapabilityError, GeneratorError
 from picoface._internals.generator_internals import _build_autoencoder, _build_vae
-from picoface._internals.model_api import TrainingHistory, generate, train
+from picoface._internals.model_api import TrainingHistory, evaluate, generate, predict, train
 from picoface.datasets import Dataset
 
 __all__ = [
@@ -22,6 +26,8 @@ __all__ = [
     "build_autoencoder",
     "build_vae",
     "train",
+    "evaluate",
+    "predict",
     "generate",
 ]
 
@@ -33,23 +39,21 @@ class ShapeError(BaseShapeError):
 def build_autoencoder(data: Dataset):
     """Build a plain (non-variational) encoder/decoder model sized for `data`.
 
-    A pedagogical stepping stone toward `build_vae()`: trainable via the same
-    `train()` call, but has no probabilistic latent space to `generate()` from.
-    Like the VAE, it also learns to classify (see `evaluate()`/`predict()`).
+    Optional, and not a prerequisite for `build_vae()`. It only learns to
+    reconstruct images: `train()` ignores `data`'s labels for it, and it can
+    neither classify (`evaluate()`/`predict()`) nor `generate()`.
     """
     input_shape = tuple(data.images.shape[1:])
-    model = _build_autoencoder(input_shape, len(data.class_names), ShapeError)
-    model.class_names = list(data.class_names)
-    return model
+    return _build_autoencoder(input_shape, ShapeError)
 
 
 def build_vae(data: Dataset):
-    """Build a variational autoencoder (VAE) sized for `data`.
+    """Build a supervised variational autoencoder (VAE) sized for `data`.
 
-    Same call shape as `build_autoencoder(data)` — swap one for the other and
-    re-run `train()` unchanged. Unlike a plain autoencoder, a trained VAE can
-    be sampled from with `generate()`. It is trained jointly to reconstruct,
-    to organize its latent space, and to classify (see `evaluate()`/`predict()`).
+    One `train()` call on labeled data teaches it to classify and to
+    generate: its classifier reads the same probabilistic latent space its
+    generator samples from, so the trained model works with both
+    `evaluate()`/`predict()` and `generate()`.
     """
     input_shape = tuple(data.images.shape[1:])
     model = _build_vae(input_shape, len(data.class_names), ShapeError)
