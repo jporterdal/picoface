@@ -23,7 +23,9 @@ See proposal.md for the full motivation and scope; this document covers how `cla
 
 ### 1. Class-conditional sampling sources labeled real data's `mu`, not a stored per-class statistic on the model
 
-`classify_generated(classifier_model, generator_model, data, n)` takes `data` — the same labeled `Dataset` the VAE was trained on — as an explicit argument, and computes each class's empirical latent cluster at call time: `encode_mu()` on `data`'s images of that class, then the mean of the resulting vectors (and their standard deviation, for sampling spread) per class.
+`classify_generated(classifier_model, generator_model, data, n)` takes `data` — the same labeled `Dataset` the VAE was trained on — as an explicit argument, and computes each class's empirical latent cluster at call time: `encode_mu()` on `data`'s images of that class, then the mean of the resulting vectors (and their per-dimension standard deviation, for sampling spread) per class. It then draws `n` latent vectors **per class** as `mean + std * N(0, I)`, decodes them, and converts them to `uint8` images before the CNN classifies them, so the CNN judges exactly what a student would see.
+
+It returns a `GeneratedImagesReport`: per-class and overall agreement, plus the generated images with their intended and predicted class names, so a notebook can show the images the numbers are about.
 
 This is preferred over having `train()` or `build_vae()` compute and cache per-class latent statistics on the model object, because:
 - It needs no change to `train()`, `TrainingHistory`, or `build_vae()` — the model-agnostic training loop stays exactly as Phase 3b/3c left it.
@@ -38,6 +40,8 @@ This is preferred over having `train()` or `build_vae()` compute and cache per-c
 
 `_Model` gains two capability-gated methods — `encode_mu(x) -> mu` and `decode(z) -> image`, both raising `NotImplementedError` by default — declared by a new `latent_access` capability that only `_VAE` sets (alongside its existing `classify`, `sample`). `linkage.py` calls these through the abstract contract, the same way `model_api.py`'s `generate()` calls `model.sample(n)` without knowing the concrete model class.
 
+The sampling, report arithmetic, and gradient-ascent loop live in `_internals/linkage_internals.py`, and `linkage.py` holds only the public functions, the report type, and the error type. This is the same split as `classifier.py`/`classifier_internals.py`, since the roadmap puts optimization loops under `_internals`.
+
 This mirrors exactly how `classify`/`sample` already work (Phase 3b's refactor) and keeps `linkage.py` from importing `_VAE` directly or using `isinstance` checks against a concrete internals class — which would violate the "arm modules expose only named entry-point functions; `_internals` details are not reached into from outside" boundary the project has held since Phase 0/3b.
 
 **Alternatives considered:**
@@ -48,7 +52,9 @@ This mirrors exactly how `classify`/`sample` already work (Phase 3b's refactor) 
 
 Before generating or classifying anything, `classify_generated()` checks `classifier_model.class_names == generator_model.class_names` (as sets, order-independent — see spec scenario) and raises a named error on mismatch. This follows the same pattern `_Model.check_data` already uses for image-shape/class-count mismatches (`ShapeError`-style, "clear error naming the mismatch, rather than failing inside internals" — ROADMAP.md's established convention since Phase 2).
 
-Nothing else enforces this today: the CNN and VAE are trained independently, each against whatever `Dataset` was passed to their own `train()` call, and both simply store whatever `class_names` that dataset provided. A capstone comparing predictions across the two models needs them to mean the same 12 classes in the same way, or the report is meaningless in a way that's easy to miss rather than crash on.
+Nothing else enforces this today: the CNN and VAE are trained independently, each against whatever `Dataset` was passed to their own `train()` call, and both simply store whatever `class_names` that dataset provided. A capstone comparing predictions across the two models needs them to mean the same classes, or the report is meaningless in a way that's easy to miss rather than crash on. Intended and predicted classes are compared by name, never by index, which is what makes order independence safe.
+
+The same check covers the other ways the three inputs can disagree, each of which would otherwise fail deep inside a model: `data`'s class names must match the generator's (they name the clusters), `data` must pass the generator's existing `check_data`, and the two models must share an image shape (the CNN classifies the generator's output). All of these raise `picoface.linkage.ShapeError`, a `BaseShapeError` like each arm's own, except `check_data`'s, which raises the generator's `ShapeError` as it does everywhere else.
 
 **Alternatives considered:**
 - **No validation; let a mismatch silently produce a confusing report** — rejected: contradicts the project's established pattern of explicit, named errors over silent wrong answers.
@@ -56,7 +62,9 @@ Nothing else enforces this today: the CNN and VAE are trained independently, eac
 
 ### 4. `activation_maximize()` starts from random noise and uses fixed internal ascent hyperparameters
 
-Starting point is a `uint8` random-noise image (converted to the model's preprocessed float range), not a real image, so the visualization reflects the class prototype rather than being anchored to whatever a chosen starting image already looks like. Step count, learning rate, and pixel clamping to `[0, 1]` after each step are internal constants — no new student-facing parameters, matching every prior phase's convention (ROADMAP.md, Key Design Decisions).
+Starting point is uniform random noise in `[0, 1]`, not a real image, so the visualization reflects the class prototype rather than being anchored to whatever a chosen starting image already looks like. Step count, learning rate, and pixel clamping to `[0, 1]` after each step are internal constants — no new student-facing parameters, matching every prior phase's convention (ROADMAP.md, Key Design Decisions).
+
+The ascent maximizes the target class's raw logit, not its softmax probability, which could also be raised by suppressing the other classes. It uses Adam over the pixels, whose step size does not depend on the gradient's scale, which differs between the CNN and the VAE. The provisional values are 200 steps at a learning rate of 0.05, about 0.07 s on the stub. Gradients are taken with `torch.autograd.grad` with respect to the pixels only, so the model's own parameters and their stored gradients are untouched.
 
 No regularization is applied to the ascent (Non-Goals). This is a known, accepted risk (see Risks below), deliberately deferred.
 
@@ -66,7 +74,7 @@ No regularization is applied to the ascent (Non-Goals). This is a known, accepte
 
 ## Risks / Trade-offs
 
-- **`classify_generated()`'s per-class report will likely be weakly informative before Phase 6's real-data tuning** — already flagged in ROADMAP.md under Phase 4. A VAE whose reconstruction is starved by uncertainty weighting (Phase 3c's known risk) will produce blurry, class-ambiguous samples regardless of how well the sampling targets a class's cluster. → Documented as expected; Phase 4's job is correct plumbing against the stub dataset, not a quality bar (consistent with how every prior phase treated the stub).
+- **`classify_generated()`'s per-class report will likely be weakly informative before Phase 6's real-data tuning** — already flagged in ROADMAP.md under Phase 4. A VAE whose reconstruction is starved by uncertainty weighting (Phase 3c's known risk) will produce blurry, class-ambiguous samples regardless of how well the sampling targets a class's cluster. → Documented as expected; Phase 4's job is correct plumbing against the stub dataset, not a quality bar (consistent with how every prior phase treated the stub). Observed on the three-class `kind="shapes"` stub, with default training and `n=20`: overall agreement of 0.33–0.75 over 5 seeds, typically with one or two classes near 1.0 and the rest near 0. The class clusters themselves were well separated (closest pair of means 1.3–3.2× the typical within-class spread), so the weak link is the decoder's sample quality, not the targeting. Tests assert the report's shape, never a value.
 - **Sampling near a class's empirical mean, rather than from its full learned distribution, could under- or over-represent how varied the VAE's generations for that class actually are.** → Acceptable for a capstone exercise whose point is a legible intended-vs-predicted comparison, not a rigorous characterization of the class-conditional distribution; the "spread" statistic (Decision 1) exists precisely so this isn't just a single point estimate.
 - **`activation_maximize()` without regularization may produce images that read as adversarial noise to a human rather than a recognizable class prototype, especially on a small CNN with sharp decision boundaries.** → Explicitly accepted for now (Non-Goals); revisited once real data and a tuned classifier exist (Phase 6), where the risk is easier to evaluate honestly than against the stub.
 - **The new `latent_access` capability adds a second axis (alongside `classify`/`sample`) that a future model type must think about.** → Kept optional and narrowly scoped (only `_VAE` declares it); a model that doesn't support it simply can't be passed as `classify_generated()`'s `generator_model`, with a clear capability error rather than a silent gap.

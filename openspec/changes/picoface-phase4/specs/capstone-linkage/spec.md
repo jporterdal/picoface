@@ -15,16 +15,24 @@ The system SHALL provide a `classify_generated(classifier_model, generator_model
 - **WHEN** `classify_generated()` produces images intended for a given class
 - **THEN** those images SHALL be drawn from the region of `generator_model`'s latent space that class's labeled images in `data` actually occupy, not from an unconditioned sample of the whole latent space
 
+#### Scenario: The report shows the images it is about
+- **WHEN** `classify_generated()` returns its report
+- **THEN** the report SHALL include every generated image in the library's `uint8` image format, together with the class each was intended for and the class the classifier predicted
+
 #### Scenario: A generator without a latent space is rejected clearly
 - **WHEN** a student calls `classify_generated()` with a `generator_model` that has no probabilistic latent space to sample class regions from (e.g. a model built by `build_autoencoder()`)
 - **THEN** the system SHALL raise the library's capability-error type, naming what the model cannot do, rather than failing inside internals
 
 ### Requirement: classify_generated() requires a shared class taxonomy
-`classify_generated()` SHALL verify that `classifier_model` and `generator_model` were built for the same set of class names before generating or classifying anything, since the two models are trained independently and nothing else guarantees they agree on a taxonomy.
+`classify_generated()` SHALL verify that `classifier_model`, `generator_model`, and `data` all use the same set of class names, and that the two models use the same image shape, before generating or classifying anything. The two models are trained independently and nothing else guarantees they agree. Intended and predicted classes SHALL be compared by class name, so the order in which each model lists its classes does not matter.
 
 #### Scenario: Mismatched class taxonomies are rejected
 - **WHEN** a student calls `classify_generated()` with a classifier and a generator built from datasets with different class names
 - **THEN** the system SHALL raise a clear error naming the mismatch, rather than producing a misleading report or failing inside internals
+
+#### Scenario: Mismatched image shapes are rejected
+- **WHEN** a student calls `classify_generated()` with a classifier and a generator built for different image shapes
+- **THEN** the system SHALL raise a clear error naming both shapes, rather than failing inside the classifier
 
 #### Scenario: Matching taxonomies proceed normally
 - **WHEN** a student calls `classify_generated()` with a classifier and a generator built from datasets with the same class names, in the same order or not

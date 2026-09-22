@@ -7,8 +7,9 @@ This module is arm-neutral: it imports nothing from the public arm modules or
 
 Every model object in the project subclasses `_Model`, which supplies the one
 thing the shared training loop cannot know (`training_step`, i.e. the loss) and
-declares optional capabilities (`classify`, `sample`) that the verbs check
-before use. `train()` also tells each model where it is in training
+declares optional capabilities (`classify`, `sample`, `latent_access`) that
+callers check before use. `latent_access` backs no public verb; only
+`picoface.linkage` uses it. `train()` also tells each model where it is in training
 (`on_epoch_start`), so a model can schedule its own loss terms, and lets each
 model set its own per-parameter learning rates (`optimizer_param_groups`) and
 constrain its parameters after every optimizer step (`on_step_end`).
@@ -126,6 +127,14 @@ class _Model(nn.Module):
         """`n` newly sampled images as an NCHW float tensor in [0, 1]."""
         raise NotImplementedError
 
+    def encode_mu(self, x: torch.Tensor) -> torch.Tensor:
+        """Latent mean vectors for a preprocessed NCHW float batch (`latent_access`)."""
+        raise NotImplementedError
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Images for a batch of latent vectors, NCHW float in [0, 1] (`latent_access`)."""
+        raise NotImplementedError
+
 
 def _require_model(model, verb: str) -> None:
     if not isinstance(model, _Model):
@@ -147,7 +156,15 @@ def _require_capability(model, capability: str, verb: str, error_cls=CapabilityE
 _CAPABILITY_PHRASES = {
     "classify": "classify images (build_autoencoder() models cannot)",
     "sample": "generate images (only build_vae() models can)",
+    "latent_access": "encode images to and decode them from a latent space "
+    "(only build_vae() models can)",
 }
+
+
+def _to_uint8_images(images: torch.Tensor) -> np.ndarray:
+    """NCHW float images in [0, 1] to NHWC uint8, the library's image format."""
+    array = images.detach().permute(0, 2, 3, 1).numpy() * 255.0
+    return np.clip(array, 0, 255).astype(np.uint8)
 
 
 def _preprocess_images(images: np.ndarray | torch.Tensor, model: _Model) -> torch.Tensor:
@@ -276,7 +293,5 @@ def generate(model, n: int) -> np.ndarray:
     model.eval()
 
     with torch.no_grad():
-        decoded = model.sample(n)
-    images = decoded.permute(0, 2, 3, 1).numpy() * 255.0
-    return np.clip(images, 0, 255).astype(np.uint8)
+        return _to_uint8_images(model.sample(n))
 

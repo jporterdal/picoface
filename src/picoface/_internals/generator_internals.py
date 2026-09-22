@@ -218,7 +218,7 @@ class _VAE(_Model):
     weighted by an annealed schedule ending at 1.
     """
 
-    capabilities = frozenset({"classify", "sample"})
+    capabilities = frozenset({"classify", "sample", "latent_access"})
     built_by = "build_vae()"
 
     def __init__(
@@ -292,9 +292,12 @@ class _VAE(_Model):
     def encode_mu(self, x: torch.Tensor) -> torch.Tensor:
         return self.encode(x)[0]
 
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decoder(z)
+
     def sample(self, n: int) -> torch.Tensor:
         """Draw `n` vectors from N(0, I) in the latent space and decode them."""
-        return self.decoder(torch.randn(n, self.latent_dim))
+        return self.decode(torch.randn(n, self.latent_dim))
 
     def training_step(
         self, inputs: torch.Tensor, labels: torch.Tensor
