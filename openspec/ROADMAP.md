@@ -19,7 +19,7 @@ A function existing in the public API does not imply it appears in student-facin
 ## Three-Arm Architecture
 
 - **Arm 1 (student-facing): classifier** — recognize basic shapes/smiley face in tiny images. `build_classifier()`, `train()`, `evaluate()`, `predict()`, plus viz helpers.
-- **Arm 2 (student-facing): generator** — produce images of the same shape classes via an autoencoder → VAE progression. `build_autoencoder()`, `build_vae()`, `train()`, `generate()`, plus latent-space viz.
+- **Arm 2 (student-facing): generator** — produce images of the same shape classes via an autoencoder → VAE progression. `build_autoencoder()`, `build_vae()`, `train()`, `generate()`, plus latent-space viz. Its models also carry a **classification branch** trained jointly with reconstruction (added in Phase 3b), so the same network classifies out of the box (`evaluate()`/`predict()`) as well as generates.
 - **Arm 3 (instructor-only): Dataset Forge** — unrestricted, modern-hardware, offline tool that procedurally renders the real training/testing image sets and ships them to students in a fixed data-contract format. Runs once before term starts.
 
 A capstone linkage module ties Arms 1 and 2 together: `classify_generated()` (score VAE output with the trained classifier) and `activation_maximize()` (visualize what the classifier "imagines" for a class).
@@ -33,11 +33,12 @@ Training must complete in seconds to minutes on an older CPU-only laptop — the
 - **`data-contract`** — the shared image-dataset interchange format (`.npz` schema + `classes.json`), the `load_dataset()` entry point, and the synthetic stub dataset used to validate downstream plumbing before real content exists.
 - **`shape-classifier`** — the student-assembled classification arm: building, training, evaluating, and running inference with a small CNN classifier via simple function calls, within an old-CPU time budget.
 - **`shape-generator`** — the student-assembled generative arm: an autoencoder-to-VAE progression for producing images of the same shape classes, via simple function calls, within an old-CPU time budget.
+- **`model-interface`** — the model-agnostic public verbs (`train`, `evaluate`, `predict`, `generate`) and the abstract model contract behind them, so a call's shape never depends on which kind of model was built. Added in Phase 3b.
 - **`capstone-linkage`** — the functions that tie the classifier and generator arms together into a closing exercise (classifying generated images; activation-maximization visualization from the classifier).
 - **`dataset-forge`** — the instructor-only, unrestricted offline tool that generates the real training/testing dataset and exports it in the `data-contract` format.
 - **`packaging`** — the installable-package structure and naming (`picoface` repo, import name, and PyPI distribution name aligned) that supports pip/zip/Colab-git-clone distribution without committing to one channel. Its requirements (naming consistency, `pyproject.toml` + src layout, Dataset Forge excluded from the installable package) are purely structural and fully satisfied by Phase 0 — Phase 7's remaining work is *choosing and documenting* which channel to actually publish through, not adding new structural requirements.
 
-No capability is a modification of an existing one — this is a new project with no prior specs.
+Phases 0–3 each introduced new capabilities. Phase 3b adds `model-interface` and is the first change to *modify* existing capabilities (`shape-classifier`, `shape-generator`).
 
 ## Goals
 
@@ -57,6 +58,8 @@ PyTorch (CPU), numpy, matplotlib. Packaging via `pyproject.toml` with a src layo
 - **PyTorch as the backend**, over Keras/TensorFlow — thinner CPU-only install, more predictable CPU performance on old hardware.
 - **Autoencoder → VAE progression, GAN deferred.** GANs are unstable to train unsupervised on a student laptop; AE→VAE shares plumbing and adds one new idea (reparameterization + KL term) at a time. Diffusion and autoregressive (PixelCNN) approaches were considered and rejected as too slow/complex for this audience and hardware budget.
 - **Public API / `_internals` boundary.** All `nn.Module` subclasses, loss functions, and training-loop code live in a non-public internals module; public modules (`datasets`, `classifier`, `generator`, `linkage`, `viz`) expose only named entry-point functions. This is the mechanism that makes "students never need to understand the details underneath" actually true.
+- **Model-agnostic verbs over an abstract model (Phase 3b).** `train`, `evaluate`, `predict`, and `generate` have one implementation in an arm-neutral internal module; each model type defines its own loss (`training_step`) and declares optional capabilities (`classify`, `sample`, `latent_mean`). The arm modules re-export the verbs (`classifier.train is generator.train`). This replaces the earlier "arms share no code" stance, which protected decoupling that the neutral module now provides.
+- **Joint classifier branch sits on the shared conv-trunk features, not the latent.** Chosen from a synthetic-shapes spike: best classifier, reconstruction untouched; a head on `mu` clusters the latent but costs ~35% reconstruction. A label-conditioned decoder was tried and deferred (didn't work at the current β).
 - **Generic data contract:** `.npz` (`images`: uint8 N×H×W×C, `labels`: int array) + `classes.json`, parameterized by H/W/C/num_classes rather than hardcoded, so the loader and both arms' plumbing can be built and proven before real content decisions exist.
 - **Disposable synthetic stub dataset** — small, arbitrary-dimension, 2–3 fake classes, shipped inside the package purely to exercise `load_dataset()` and all three arms before Dataset Forge exists. This is the mechanism (not just the intent) behind deferring taxonomy/resolution/noise decisions to Phase 5.
 - **Linkage operates on in-memory model objects, not files.** No save/load or serialization format for MVP; capstone exercise runs within a single notebook session.
@@ -80,8 +83,9 @@ Each phase assumes all prior phases are complete. A disposable stub dataset is u
 |---|---|---|---|
 | 0 | Scaffolding | `packaging` (partial) | **Done** — archived at `openspec/changes/archive/2026-08-28-picoface-phase0` |
 | 1 | Data contract + stub dataset | `data-contract` | **Done** — archived at `openspec/changes/archive/2026-08-31-picoface-phase1` |
-| 2 | Classifier arm (Arm 1) plumbing | `shape-classifier` | **In progress** — `openspec/changes/picoface-phase2` |
-| 3 | Generator arm (Arm 2) plumbing | `shape-generator` | Not started |
+| 2 | Classifier arm (Arm 1) plumbing | `shape-classifier` | **Done** — archived at `openspec/changes/archive/2026-08-31-picoface-phase2` |
+| 3 | Generator arm (Arm 2) plumbing | `shape-generator` | **Done** — archived at `openspec/changes/archive/2026-08-31-picoface-phase3` |
+| 3b | Joint classifier/generator model + model-agnostic verbs | `model-interface` (new); `shape-classifier`, `shape-generator` (modified) | **In progress** — `openspec/changes/picoface-phase3b-joint-model` |
 | 4 | Arms linkage | `capstone-linkage` | Not started |
 | 5 | Dataset Forge (Arm 3) + real content decisions | `dataset-forge` | Not started |
 | 6 | End-to-end integration & tuning | — (no new capability; revisits 1–4) | Not started |
@@ -108,14 +112,23 @@ Generic `.npz` schema (images/labels/`classes.json`, parameterized by H/W/C/num_
 - `generate()` is VAE-only. Calling it with a model from `build_autoencoder()` raises an explicit error naming the AE/VAE mismatch, rather than failing on a missing sampling method deep in `_internals` — same pattern as Phase 2's `ShapeError`.
 - `build_autoencoder()` is kept at function/signature parity with `build_vae()` (same call shape, same arm) for API consistency, but per Student-Visible Scope only needs to work correctly — it does not need notebook-ready polish. Phase 7 decides whether the AE step is actually walked through in the arm's template notebook or the notebook goes straight to `build_vae()`.
 
+### Phase 3b — Joint model + model-agnostic verbs
+Adds a classification branch (a small MLP head on the shared conv-trunk features) to both `build_autoencoder()` and `build_vae()` models, trained jointly with reconstruction (+ KL for the VAE) via one `train()` call; loss = `MSE + β·KL + λ·CE` with fixed internal `λ = 1.0`. Behind it, a behavior-preserving refactor (a hard prerequisite, done first) puts every model on an abstract `_Model` so `train`/`evaluate`/`predict`/`generate` are model-agnostic: `classifier.evaluate`/`predict` work on the joint models, and `generate` raises a clear capability error for any model that can't sample. `TrainingHistory` is unified and gains `classification_loss`/`accuracy`; `plot_training_history` plots accuracy when present.
+
+Deliberate non-goals: the joint branch does **not** make `show_latent_space()` show class clusters, and there is no class-conditional `generate(cls=...)`. Whether Arm 1 remains a separate student stage is left to Phase 7.
+
 ### Phase 4 — Arms linkage
 `classify_generated()`, `activation_maximize()`, consuming trained models from Phases 2–3. Resolves what the capstone tie-in exercise looks like.
+
+- Both functions can consume any model with a `classify` capability (Phase 3b's protocol; `classify` is differentiable with respect to input pixels, which `activation_maximize()` needs), so the judge may be Arm 1's CNN or a joint model's own head.
+- The draft spec's "intended class" wording does not fit an *unconditional* `generate()` — there is no intended class. Either report the distribution of predicted classes over generated samples, or revisit a class-conditional decoder first (see Phase 6).
+- Expect `classify_generated()` to be uninformative until β is tuned on real data: a synthetic-shapes spike showed generated samples judged as only two of four classes at the current β = 0.01, with reconstruction only ~30% better than the mean image.
 
 ### Phase 5 — Dataset Forge (Arm 3) + real content decisions
 THIS is where shape taxonomy, resolution/color depth, and noise/augmentation policy actually get decided and built, unrestricted hardware/libs, exports the real dataset in the Phase 1 contract format.
 
 ### Phase 6 — End-to-end integration & tuning
-Swap real dataset in for the stub across Arms 1/2/linkage, tune for "seconds-to-minutes on old CPU," set/verify an accuracy/quality bar. Also revisits Phase 3's placeholder VAE hyperparameters (β KL-divergence weight, `latent_dim=2`) against real data — the stub-dataset values were never meant to be final.
+Swap real dataset in for the stub across Arms 1/2/linkage, tune for "seconds-to-minutes on old CPU," set/verify an accuracy/quality bar. Also revisits Phase 3's placeholder VAE hyperparameters (β KL-divergence weight, `latent_dim=2`) against real data — the stub-dataset values were never meant to be final. Phase 3b adds to that list: the classification loss weight `λ`, the classification head's architecture and its placement on the trunk (vs. the latent), and whether a label-conditioned decoder becomes workable once β is tuned. Also verify that `train()`'s default epochs give high classification accuracy on the real dataset — the 16-image stub is too small for the defaults to show it (only 1/10 seeds above chance at 10 epochs vs. 10/10 at 50).
 
 ### Phase 7 — Student docs & MVP packaging
 Docs stating explicit constraints, template notebooks per arm plus the capstone, finalize distribution mechanism (pip/zip/Colab clone).
@@ -125,6 +138,8 @@ Docs stating explicit constraints, template notebooks per arm plus the capstone,
 - **VAE output may look too blurry to feel motivating.** → Keep resolution small enough that blur reads as expected, not a bug; document explicitly; GAN remains a documented stretch extension.
 - **Plumbing validated only against a synthetic stub dataset (Phases 1–4) may hit unexpected issues once real, more visually complex content arrives in Phase 6.** → Phase 6 is explicitly scoped as an integration/tuning phase with room to revisit Phases 2–4; the stub dataset should include at least one deliberately non-trivial synthetic class.
 - **The "seconds-to-minutes on old CPU" requirement is only fully validated at Phase 6.** → Measure and log wall-clock training time against the stub dataset from Phase 2 onward, so speed regressions surface early.
+- **The joint model's 2D latent plot may not show class clusters.** A head on the trunk classifies well but doesn't organize the latent; in a spike a plain VAE's latent was only weakly class-organized (5-NN 0.40 vs. 0.25 chance) once shapes varied in position/size. → Not promised anywhere; a head on `mu` would cluster it at a ~35% reconstruction cost, so it is a Phase 6 trade-off, not an MVP requirement.
+- **The joint classification head is weaker than Arm 1's standalone CNN** (0.976 vs. 0.996 in a spike). → Accepted; Arm 1 stays available, and a deeper head is an internal-only fix if the gap matters on real data.
 - **Dataset Forge's unrestricted dependencies could leak into or drift against the student package's environment.** → Dataset Forge maintains its own dependency manifest, entirely decoupled from `picoface`'s install.
 - **"GAN as documented future work" could create scope-creep pressure mid-project.** → Explicitly a non-goal; any GAN work requires a new change proposal.
 
@@ -136,4 +151,6 @@ Docs stating explicit constraints, template notebooks per arm plus the capstone,
 - Concrete accuracy/quality bar for the reference implementation — resolved in Phase 6, measured against the real dataset.
 - VAE hyperparameter placeholders (β KL-divergence weight, `latent_dim=2`) set in Phase 3 against the stub dataset — revisited in Phase 6 against real data.
 - Whether Phase 3's `build_autoencoder()` step is walked through in the generator arm's template notebook, or the notebook goes straight to `build_vae()` — resolved in Phase 7.
+- Whether Arm 1 remains a separate student stage now that Arm 2's network also classifies, or the curriculum uses the joint model alone (in which case "capstone ties Arms 1 and 2" needs redefining) — resolved in Phase 7. Arm 1's code is kept either way.
+- Phase 3b's `λ`, head architecture/placement, and label-conditioned-decoder question — revisited in Phase 6 alongside β and `latent_dim`.
 - Final distribution channel (PyPI vs. zip vs. Colab git-clone) — resolved in Phase 7; the packaging structure already supports all three, so this is a low-stakes choice deferred on purpose.

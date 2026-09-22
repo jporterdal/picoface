@@ -3,25 +3,36 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from picoface._internals.classifier_internals import TrainingHistory
-from picoface._internals.generator_internals import _encode_mu
+from picoface._internals.model_api import TrainingHistory, _latent_mean
 from picoface.datasets import Dataset
-from picoface.generator import GeneratorError, ShapeError
 
 __all__ = ["plot_training_history", "show_latent_space"]
 
 
 def plot_training_history(history: TrainingHistory):
-    """Plot loss per epoch from a classifier's `TrainingHistory`.
+    """Plot loss per epoch from a `TrainingHistory` returned by `train()`.
+
+    If the history also recorded classification accuracy (models that
+    classify alongside generating), a second panel shows accuracy per epoch.
 
     Returns the matplotlib `Figure`.
     """
-    fig, ax = plt.subplots()
     epochs = range(1, len(history.loss) + 1)
-    ax.plot(epochs, history.loss, marker="o")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title("Training Loss")
+
+    if history.accuracy:
+        fig, (ax_loss, ax_acc) = plt.subplots(2, 1, sharex=True)
+        ax_acc.plot(range(1, len(history.accuracy) + 1), history.accuracy, marker="o")
+        ax_acc.set_xlabel("Epoch")
+        ax_acc.set_ylabel("Accuracy")
+        ax_acc.set_ylim(0, 1.05)
+        ax_acc.set_title("Training Accuracy")
+    else:
+        fig, ax_loss = plt.subplots()
+        ax_loss.set_xlabel("Epoch")
+
+    ax_loss.plot(epochs, history.loss, marker="o")
+    ax_loss.set_ylabel("Loss")
+    ax_loss.set_title("Training Loss")
     return fig
 
 
@@ -32,13 +43,7 @@ def show_latent_space(vae_model, data: Dataset):
     reproducible plot. Raises `GeneratorError` if `vae_model` was built by
     `build_autoencoder()` instead of `build_vae()`.
     """
-    if not getattr(vae_model, "is_variational", False):
-        raise GeneratorError(
-            "show_latent_space() requires a model built by build_vae(); got a "
-            "build_autoencoder() model."
-        )
-
-    points = _encode_mu(vae_model, data.images, ShapeError)
+    points = _latent_mean(vae_model, data.images)
     labels = np.asarray(data.labels)
 
     fig, ax = plt.subplots()

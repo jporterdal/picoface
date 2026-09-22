@@ -35,8 +35,10 @@ The system SHALL provide a `generate()` function that samples new images from a 
 Models built by `build_autoencoder()` and `build_vae()` SHALL include a classification branch producing one score per class of the `Dataset` they were built from, in parallel with the generative branch and reading from the encoder's shared feature representation (not from the sampled or mean latent vector). `train()` SHALL optimize the generative objective and a cross-entropy classification loss together in a single training run, with the classification loss weight fixed internally and not student-configurable.
 
 #### Scenario: Model classifies after a single training call
-- **WHEN** a student builds a model with `build_vae(data)` and calls `train(model, data)` on a dataset of at least two classes
-- **THEN** `evaluate(model, data)` on the same data SHALL return an accuracy above chance level (1 divided by the number of classes) on the stub dataset
+- **WHEN** a student builds a model with `build_vae(data)` and trains it with a single `train(model, data, epochs=50)` call on the stub dataset (at least two classes)
+- **THEN** `evaluate(model, data)` on the same data SHALL return an accuracy above chance level (1 divided by the number of classes)
+
+Note: how many epochs are needed depends on dataset size, because each epoch performs one optimizer step per batch. The tiny stub dataset (16 images, one step per epoch at the default batch size) needs more epochs than `train()`'s default of 10; this scenario therefore fixes the epoch count rather than promising it at the default.
 
 #### Scenario: Model output covers each class
 - **WHEN** a model is built from a `Dataset` with N class names
