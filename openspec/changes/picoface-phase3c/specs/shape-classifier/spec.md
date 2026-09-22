@@ -23,3 +23,35 @@ The project's tests SHALL assert classifier accuracy against a bound that a brok
 #### Scenario: A broken model fails the assertion
 - **WHEN** a classifier that predicts without regard to its input is evaluated
 - **THEN** the accuracy assertion SHALL fail
+
+## MODIFIED Requirements
+
+### Requirement: evaluate() and predict()
+The system SHALL provide `evaluate(model, data)` to report classification accuracy on a `Dataset`, and `predict(model, image)` to classify a single new image and return its class name, both without exposing internal tensor manipulation to the caller. Both SHALL accept any model with a classification capability — a model built by `build_classifier()` or by `build_vae()` (see `model-interface`). Models built by `build_autoencoder()` do not classify.
+
+#### Scenario: Student evaluates a trained classifier
+- **WHEN** a student calls `evaluate(model, data)` after training
+- **THEN** the function SHALL return an accuracy value between 0 and 1 via a single function call
+
+#### Scenario: Student predicts a single image's class
+- **WHEN** a student calls `predict(model, image)` with a single image array
+- **THEN** the function SHALL return the predicted class name (not a raw integer index)
+
+#### Scenario: Same functions work on a joint model
+- **WHEN** a student calls `evaluate(model, data)` and `predict(model, image)` on a trained `build_vae()` model
+- **THEN** the functions SHALL return accuracy and a class name respectively, with no different call shape from the CNN case
+
+### Requirement: Training-history visualization
+The system SHALL provide a viz helper function that plots a training history (loss per epoch, and classification accuracy per epoch when the history contains it) via a single function call, without the student writing plotting code.
+
+#### Scenario: Student plots training progress
+- **WHEN** a student calls the training-history plotting helper with the object returned by `train()`
+- **THEN** a loss-vs-epoch chart SHALL be produced without the student manipulating matplotlib directly
+
+#### Scenario: Accuracy is plotted when available
+- **WHEN** the helper is given the history of a `build_vae()` model, which records classification accuracy
+- **THEN** the resulting figure SHALL also show classification accuracy per epoch
+
+#### Scenario: Classifier-only history plots as before
+- **WHEN** the helper is given the history of a `build_classifier()` model
+- **THEN** the figure SHALL show loss per epoch, with no error from the missing reconstruction or KL metrics

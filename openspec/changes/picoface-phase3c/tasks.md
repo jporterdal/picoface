@@ -1,11 +1,12 @@
-## 1. Loss scale normalization (do this first)
+## 1. Per-pixel ELBO (do this first)
 
-Decision 5 requires this to land before annealing or uncertainty weighting, so the learned parameters cannot silently absorb a resolution-scaling artifact.
+Decision 5 requires the reconstruction and KL terms to be on the per-pixel ELBO scale before annealing or uncertainty weighting is layered on, so the learned `sigma`s are introduced on the scale they are specified on. All edits are in `_VAE.training_step` in `generator_internals.py`. `D` below is `H*W*C` of the model's `input_shape`.
 
-- [ ] 1.1 In `_train_loop`, change the reconstruction term from per-pixel mean reduction to a per-image scale (sum over pixels, mean over batch), matching the KL term's existing per-image reduction
-- [ ] 1.2 Record the pre-change and post-change loss magnitudes on the stub dataset, and re-derive the KL weight that reproduces the current effective regularization (`BETA = 0.01` at 16x16x3 is roughly equivalent to a conventional beta near 7.7) — this becomes the starting point for the annealing ceiling in 4.2
-- [ ] 1.3 Delete the now-incorrect `BETA` comment block in `generator_internals.py` explaining the value as "deliberately kept small"; its reasoning compared beta against the mean-reduced reconstruction scale rather than the per-image scale the KL term lives on
-- [ ] 1.4 Confirm on two differently-sized stub datasets that the reconstruction/KL balance no longer varies with `H*W*C`
+- [ ] 1.1 Keep the reconstruction term's per-pixel mean reduction (`mse_loss(..., reduction="mean")`); do not switch to a summed reduction (Decision 5, alternatives)
+- [ ] 1.2 Divide the per-image KL term (sum over latent dimensions, mean over batch — unchanged) by `D`, so reconstruction and KL together form the ELBO divided by `D`
+- [ ] 1.3 Before changing anything, record reconstruction loss and KL magnitudes on the stub dataset under the current objective; after 1.2, record them again, and note in the diagnostics record (Section 8) that the old `BETA = 0.01` corresponds to a KL weight of `0.01 * D` (7.68 at 16x16x3) on the new scale, versus the ELBO weight of 1
+- [ ] 1.4 Remove `BETA` and its comment block (the "deliberately kept small" reasoning compared it against the wrong scale); the KL weight now comes from the annealing schedule in 4.2, ending at 1
+- [ ] 1.5 Confirm on two stub datasets differing only in resolution (e.g. 16x16 and 32x32) that, after training, the learned reconstruction `log(sigma_r^2)` values agree closely and the reconstruction and classification task weights are comparable — i.e. the task balance does not scale with `D`. Record both runs. (Depends on Section 4; run after 4.3.)
 
 ## 2. Stub dataset: spatially-distinguished classes
 
@@ -17,42 +18,45 @@ Decision 5 requires this to land before annealing or uncertainty weighting, so t
 
 ## 3. Internals: the supervised VAE model
 
+Starting point is Phase 3b's code: `_VAE` and `_Autoencoder` are `_Model` subclasses in `generator_internals.py`, each with a classification head on the conv-trunk features (Proposal: Relationship to Phase 3b). 3b's refactor is kept; its model decisions are overwritten.
+
 - [ ] 3.1 Revalue `LATENT_DIM` above 2 in `generator_internals.py`, record the value tried and its effect in the diagnostics table (final value is a Phase 6 decision)
-- [ ] 3.2 Add a classification head to `_VAE`: a small linear stack from `latent_dim` to `num_classes`, reading the reparameterized sample `z` — the same tensor the decoder consumes (Decision 1)
-- [ ] 3.3 Thread `num_classes` through `_build_vae()` and `_VAE.__init__`; store `class_names` on the model as `build_classifier()` does
-- [ ] 3.4 Extend `_VAE.forward()` to return class logits alongside the reconstruction, `mu`, and `logvar`
-- [ ] 3.5 Update `_validate_decode_shape()` for the widened forward-pass return signature, keeping the build-time dummy pass-through intact
-- [ ] 3.6 Add an internal inference helper that returns class logits from `mu` rather than a sample, so `evaluate()`/`predict()` are deterministic (Decision 1); repurpose `_encode_mu` for this rather than deleting it
-- [ ] 3.7 Leave `_Autoencoder`, `_Encoder`, and the shared conv trunk unchanged
+- [ ] 3.2 Move `_VAE`'s classification head off the trunk features: a small stack from `latent_dim` to `num_classes`, reading the reparameterized sample `z` in `forward()` — the same tensor the decoder consumes (Decision 1)
+- [ ] 3.3 Change `_VAE.classify()` to read `mu` (via `encode_mu()`) through the latent head rather than the trunk, so `evaluate()`/`predict()` are deterministic (Decision 1); confirm it remains differentiable with respect to input pixels (Phase 4's `activation_maximize()` needs this)
+- [ ] 3.4 Remove `"latent_mean"` from `_VAE.capabilities`; keep `encode_mu()` as the internal the latent head's inference path uses
+- [ ] 3.5 Remove `_Autoencoder`'s classification head and its `classify` capability; its `num_classes` becomes `None` so the inherited `check_data` skips the class-count check (Decision 7)
+- [ ] 3.6 Remove `CLASSIFICATION_WEIGHT` and its comment block; replace 3b's head-placement comment with one citing Decision 1
+- [ ] 3.7 Keep `_validate_decode_shape()` working for `_VAE.forward()`'s return tuple and the autoencoder's now single-tensor return; leave the shared conv trunk and decoder architecture unchanged
 
-## 4. Internals: training loop
+## 4. Internals: VAE loss and the shared training loop
 
-- [ ] 4.1 Change `_train_loop` to build a `TensorDataset(images, labels)` and to accept labels, with a three-way dispatch: autoencoder (reconstruction only, labels ignored), VAE (reconstruction + annealed KL + weighted classification, labels required)
-- [ ] 4.2 Implement the KL annealing schedule: ramp the KL weight from zero to a ceiling across training, as an internal function of epoch with no student-facing parameter
-- [ ] 4.3 Add learned homoscedastic uncertainty parameters for the two task losses (reconstruction, classification) as `nn.Parameter` log-variances on the model, combined as `(1 / (2 * sigma^2)) * L + log(sigma)` per Kendall et al. (2018)
+- [ ] 4.1 Add a training-progress hook to `_Model` in `model_api.py` (no-op by default) and call it from the shared `train()` before each epoch with the epoch index and the caller's total `epochs` (Decision 6); do not add any model-type branching to `train()`
+- [ ] 4.2 Implement the KL annealing schedule in `_VAE`, driven by that hook: ramp the KL weight from zero to 1 (the ELBO weight — not a tuned ceiling, Decision 3) as a function of progress relative to total epochs; only the schedule's length and shape are provisional, with no student-facing parameter
+- [ ] 4.3 Add learned log-variances `log(sigma_r^2)` and `log(sigma_c^2)` as `nn.Parameter`s on `_VAE`, and combine the task losses in `_VAE.training_step` per Decision 4:
+  - reconstruction: `MSE / (2 * sigma_r^2) + 0.5 * log(sigma_r^2)` (per-pixel Gaussian NLL; `MSE` is the per-pixel mean from 1.1)
+  - classification: `CE / sigma_c^2 + 0.5 * log(sigma_c^2)` (no factor of 2 in the denominator)
+  - total: reconstruction + classification + `kl_weight * KL / D`
 - [ ] 4.4 Do NOT apply uncertainty weighting to the KL term (Decision 3) — it is governed by 4.2's schedule alone
-- [ ] 4.5 Add a floor on the learned `log(sigma^2)` values as the mitigation lever for the `1 / (2 * L)` starvation dynamic (Decision 4); leave its value provisional and record it
-- [ ] 4.6 Decide by experiment whether the uncertainty parameters are frozen during the annealing warmup or allowed to re-equilibrate; freezing is the conservative default (Decision 3). Record which was chosen and why
-- [ ] 4.7 Ensure the uncertainty parameters are registered with the optimizer alongside the model's other parameters
-- [ ] 4.8 Extend `TrainingHistory` with per-epoch `classification_loss`, `kl_weight`, and the learned task weights, alongside the existing `loss`, `reconstruction_loss`, `kl_loss`, and `wall_clock_seconds`
+- [ ] 4.5 Add a floor on each learned `log(sigma^2)` value, capping how large a task's weight can grow — the mitigation lever for the lower-loss-earns-higher-weight starvation dynamic (Decision 4); leave its value provisional and record it
+- [ ] 4.6 Decide by experiment whether the uncertainty parameters are frozen during the annealing warmup or allowed to re-equilibrate; freezing is the conservative default (Decision 3), implemented via the 4.1 hook. Record which was chosen and why
+- [ ] 4.7 Confirm the uncertainty parameters are picked up by the shared `train()`'s optimizer via `model.parameters()`
+- [ ] 4.8 Extend the shared `TrainingHistory` with per-epoch `kl_weight` and the learned `log(sigma_r^2)` and `log(sigma_c^2)` values, reported through `training_step`'s metrics dict, alongside the existing `loss`, `reconstruction_loss`, `kl_loss`, `classification_loss`, `accuracy`, and `wall_clock_seconds`; fields a model does not report stay empty lists
+- [ ] 4.9 Reduce `_Autoencoder.training_step` to reconstruction loss only (labels received and ignored)
 
 ## 5. Public API: `src/picoface/generator.py`
 
-- [ ] 5.1 Update `build_vae(data)` to derive `num_classes` from `data.class_names` and pass it through; keep the `build_vae(data)` call shape unchanged
-- [ ] 5.2 Add a class-count consistency check to `train()` for VAE models, raising the generator arm's `ShapeError`, mirroring `_check_class_count()` in `classifier.py`
-- [ ] 5.3 Pass `data.labels` into `_train_loop`; set `model.class_names` on the way through, as `classifier.train()` does
-- [ ] 5.4 Add `evaluate(model, data) -> float` for VAE models, returning accuracy in `[0, 1]`, raising `GeneratorError` for autoencoder models
-- [ ] 5.5 Add `predict(model, image) -> str` for VAE models, returning a class *name*, raising `GeneratorError` for autoencoder models
-- [ ] 5.6 Update `__all__` and the module docstring: the VAE is one supervised model serving both workflows, not a generation-only model
-- [ ] 5.7 Update `build_autoencoder()`'s docstring to state it is optional and not a prerequisite for `build_vae()` — remove the "pedagogical stepping stone" framing (Decision 7)
-- [ ] 5.8 Confirm no `nn.Module` subclasses, loss functions, or training-loop code became importable from `picoface.generator`
+- [ ] 5.1 Keep `build_vae(data)` recording `num_classes`/`class_names` from `data` (as 3b does); change `build_autoencoder(data)` to stop recording `num_classes`
+- [ ] 5.2 Re-export the shared `evaluate` and `predict` from `model_api` in `picoface.generator` and add them to `__all__`, so `generator.evaluate is classifier.evaluate`
+- [ ] 5.3 Update the module docstring: the VAE is one supervised model serving both workflows; drop the "autoencoder-to-VAE progression" framing
+- [ ] 5.4 Update `build_autoencoder()`'s docstring to state it is optional and not a prerequisite for `build_vae()`, and that it does not classify — remove the "pedagogical stepping stone" framing and 3b's "it also learns to classify" line (Decision 7)
+- [ ] 5.5 Update `build_vae()`'s docstring to describe classification through the latent rather than a parallel branch
+- [ ] 5.6 Confirm no `nn.Module` subclasses, loss functions, or training-loop code became importable from `picoface.generator`
 
 ## 6. Remove the latent-space visualization
 
-- [ ] 6.1 Remove `show_latent_space()` from `src/picoface/viz.py` and from its `__all__`
-- [ ] 6.2 Remove the now-unused imports in `viz.py` (`_encode_mu`, `Dataset`, `GeneratorError`, `ShapeError`, `numpy`), leaving `plot_training_history()` untouched
-- [ ] 6.3 Remove `test_show_latent_space_smoke_and_ae_rejection` from `tests/test_generator.py`
-- [ ] 6.4 Confirm `_encode_mu` survives in internals for its new inference role (3.6) rather than being removed with its former caller
+- [ ] 6.1 Remove `show_latent_space()` from `src/picoface/viz.py` and from its `__all__`, and remove its now-unused imports (`_latent_mean`, `Dataset`, `numpy`), leaving `plot_training_history()` untouched
+- [ ] 6.2 Remove `_latent_mean()` and the `"latent_mean"` entry in `_CAPABILITY_PHRASES` from `model_api.py`
+- [ ] 6.3 Remove `test_show_latent_space_smoke_and_ae_rejection` from `tests/test_generator.py` and `test_show_latent_space_still_plots_one_point_per_image_on_a_joint_model` from `tests/test_joint_model.py`
 
 ## 7. Tests
 
@@ -62,13 +66,15 @@ Decision 5 requires this to land before annealing or uncertainty weighting, so t
 - [ ] 7.4 Add a supervised end-to-end test: `build_vae(data)` → `train(model, data)` → `evaluate(model, held_out)` → `predict(model, image)` → `generate(model, n=5)`, confirming all four work from one trained model
 - [ ] 7.5 Add a labels-actually-matter test: train on shuffled labels and confirm held-out accuracy degrades relative to correct labels — the regression tripwire against a silently unsupervised training path
 - [ ] 7.6 Add a loose held-out accuracy assertion on the spatially-distinguished stub: above chance by a margin, bar set well below observed (Decision 8)
-- [ ] 7.7 Add a class-count mismatch test for the generator's `train()`, confirming `ShapeError`
-- [ ] 7.8 Add `evaluate()`/`predict()`-on-autoencoder tests, confirming `GeneratorError`
-- [ ] 7.9 Add an annealing test: confirm the recorded `kl_weight` for the first epoch is below that of the final epoch
+- [ ] 7.7 Keep 3b's class-count mismatch test (`test_joint_model_class_count_mismatch_raises_shape_error`) narrowed to the VAE, confirming `ShapeError`; confirm the autoencoder does not raise on a class-count difference
+- [ ] 7.8 Add `evaluate()`/`predict()`-on-autoencoder tests, confirming `GeneratorError` (and that it is still caught by `except CapabilityError`); update 3b's `test_evaluate_rejects_a_model_without_classification` accordingly
+- [ ] 7.9 Add an annealing test: confirm the recorded `kl_weight` for the first epoch is below that of the final epoch, that the final epoch's `kl_weight` is 1, and that both hold for a short run (e.g. `epochs=3`) and a longer one — the schedule is relative to the requested epochs
 - [ ] 7.10 Add a diagnostics-completeness test: confirm `TrainingHistory` exposes per-epoch reconstruction, KL, classification, KL weight, and learned task weights for a VAE, and remains empty-listed for an autoencoder
 - [ ] 7.11 Re-validate the CPU time budget against the full combined objective — the existing 300-second ceiling was measured for reconstruction + KL alone
 - [ ] 7.12 Confirm the shape-agnosticism test still passes for both model types across differing image shapes and class counts
 - [ ] 7.13 Confirm the autoencoder path still trains with labels present but ignored
+- [ ] 7.14 Reconcile Phase 3b's `tests/test_joint_model.py` with this change. Narrow to the VAE (drop the autoencoder parametrization): classifies-above-chance (superseded by 7.4/7.6 on held-out data), predict-returns-class-name, records-num-classes, evaluate-is-deterministic, classify-is-differentiable, plot-shows-accuracy. Update: VAE/autoencoder history-series tests to the new field sets (autoencoder: reconstruction only). Keep unchanged: shape-mismatch, one-handler-catches-both-arms, generate-rejects, train-rejects-non-models, same-function-from-both-arms (extend to `evaluate`/`predict` from `picoface.generator`), signature tests, shape-agnosticism, wall-clock ceiling (fold into 7.11)
+- [ ] 7.15 Re-check 3b's `test_joint_vae_reconstruction_loss_decreases_with_classification_branch` under annealing: reconstruction may rise as the KL weight ramps, so assert on the warmup window or on first-vs-best rather than first-vs-last if needed, and record which
 
 ## 8. Diagnostics record for Phase 6
 
@@ -82,11 +88,14 @@ Decision 5 requires this to land before annealing or uncertainty weighting, so t
 - [ ] 9.1 Update `openspec/ROADMAP.md`'s three-arm description: Arms 1 and 2 are no longer independent student-facing paths — the supervised VAE is the student's model, the CNN is the independent validator
 - [ ] 9.2 Add a Phase 3c row to the phase table and a Phase 3c section describing this change
 - [ ] 9.3 Clarify Phase 4's scope in the roadmap: the classification capability now ships with the model rather than after it, leaving Phase 4 the linkage exercise (`classify_generated()` scored by the independent CNN, `activation_maximize()`)
-- [ ] 9.4 Resolve the `latent_dim=2` open question (unpinned) and restate the beta open question as the annealing ceiling plus the uncertainty-weight floor
+- [ ] 9.4 Resolve the `latent_dim=2` open question (unpinned) and the beta open question (the KL weight is now the ELBO weight of 1 on a per-pixel scale, reached by annealing); restate what remains open as the annealing schedule's length/shape and the `log(sigma^2)` floor
 - [ ] 9.5 Update the Phase 3 bullet list in the roadmap, which still states `latent_dim` is fixed at 2 and beta is a fixed constant
 - [ ] 9.6 Record the Kendall-weighting starvation dynamic (Decision 4) in the roadmap's Risks section, so it is visible to Phase 6 rather than living only in this change's design
 - [ ] 9.7 Update the roadmap's stub-dataset risk entry to reflect that the "deliberately non-trivial synthetic class" mitigation is now implemented
 - [ ] 9.8 Confirm `README.md` needs no change — no student-facing claim it makes is affected
+- [ ] 9.9 Mark Phase 3b's superseded model decisions in the roadmap: the Arm 2 description ("classification branch ... added in Phase 3b"), the "Joint classifier branch sits on the shared conv-trunk features" decision, the Phase 3b section's head-placement/λ/autoencoder text, the Phase 4 note that the judge may be "a joint model's own head", the Phase 6 revisit list's λ and head-placement items, and the Risks entries on the 2D latent plot and the trunk head's accuracy gap. Keep 3b's `model-interface` entries — that refactor stands (Decision 6)
+- [ ] 9.10 Update the phase table's Phase 3b row from "In progress" to archived
+- [ ] 9.11 Update the `## Purpose` paragraph of `openspec/specs/shape-generator/spec.md`, which still describes "an autoencoder-to-VAE progression, plus latent-space visualization" — spec deltas cannot change it, so edit it directly: the capability is the supervised VAE (classifies and generates) plus an optional reconstruction-only autoencoder. In the same edit, rename the `build_vae()` scenario "The swap adds only the probabilistic latent" to "The swap adds the probabilistic latent and classification" — its body was rewritten by this change's delta, but OpenSpec deltas cannot rename a scenario, so the old name is carried until then
 
 ## 10. Verification
 
