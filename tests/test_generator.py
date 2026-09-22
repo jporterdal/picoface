@@ -4,6 +4,7 @@ matplotlib.use("Agg")
 
 import numpy as np
 import pytest
+import torch
 
 from picoface._internals.stub_data import make_stub_dataset
 from picoface.generator import (
@@ -125,6 +126,10 @@ def test_decode_shape_mismatch_raises_shape_error():
 
 
 def test_vae_reconstruction_loss_decreases():
+    # Seeded: with 16 images and batch_size=16 this is one optimizer step per
+    # epoch, so an unseeded 5-epoch comparison failed ~10% of runs. Improvement
+    # is real over longer runs (see picoface-phase3b-joint-model tasks.md, 1.9).
+    torch.manual_seed(0)
     data = make_stub_dataset(n_per_class=8, height=16, width=16, channels=3)
     model = build_vae(data)
 

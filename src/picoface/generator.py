@@ -3,22 +3,19 @@
 No `nn.Module` authoring, no hand-written training loop: `build_autoencoder()`
 or `build_vae()` constructs a model sized to your data, `train()` runs the
 full training loop, and `generate()` samples new images from a trained VAE —
-all via plain function calls. GAN-based generation is a possible future
-extension, not part of this library.
+all via plain function calls. `train()` and `generate()` are the same
+model-agnostic functions used elsewhere in the library. GAN-based generation
+is a possible future extension, not part of this library.
 """
 
-import numpy as np
-
-from picoface._internals.generator_internals import (
-    TrainingHistory,
-    _build_autoencoder,
-    _build_vae,
-    _sample_generate,
-    _train_loop,
-)
+from picoface._internals.errors import BaseShapeError, CapabilityError, GeneratorError
+from picoface._internals.generator_internals import _build_autoencoder, _build_vae
+from picoface._internals.model_api import TrainingHistory, generate, train
 from picoface.datasets import Dataset
 
 __all__ = [
+    "BaseShapeError",
+    "CapabilityError",
     "ShapeError",
     "GeneratorError",
     "TrainingHistory",
@@ -29,14 +26,8 @@ __all__ = [
 ]
 
 
-class ShapeError(ValueError):
+class ShapeError(BaseShapeError):
     """Raised when an input/output image shape doesn't match what's expected."""
-
-
-class GeneratorError(ValueError):
-    """Raised when a function requiring a `build_vae()` model is given a
-    `build_autoencoder()` model instead.
-    """
 
 
 def build_autoencoder(data: Dataset):
@@ -44,9 +35,12 @@ def build_autoencoder(data: Dataset):
 
     A pedagogical stepping stone toward `build_vae()`: trainable via the same
     `train()` call, but has no probabilistic latent space to `generate()` from.
+    Like the VAE, it also learns to classify (see `evaluate()`/`predict()`).
     """
     input_shape = tuple(data.images.shape[1:])
-    return _build_autoencoder(input_shape, ShapeError)
+    model = _build_autoencoder(input_shape, len(data.class_names), ShapeError)
+    model.class_names = list(data.class_names)
+    return model
 
 
 def build_vae(data: Dataset):
@@ -54,45 +48,10 @@ def build_vae(data: Dataset):
 
     Same call shape as `build_autoencoder(data)` — swap one for the other and
     re-run `train()` unchanged. Unlike a plain autoencoder, a trained VAE can
-    be sampled from with `generate()`.
+    be sampled from with `generate()`. It is trained jointly to reconstruct,
+    to organize its latent space, and to classify (see `evaluate()`/`predict()`).
     """
     input_shape = tuple(data.images.shape[1:])
-    return _build_vae(input_shape, ShapeError)
-
-
-def train(
-    model,
-    data: Dataset,
-    epochs: int = 10,
-    batch_size: int = 16,
-    learning_rate: float = 1e-3,
-) -> TrainingHistory:
-    """Train `model` (from `build_autoencoder()` or `build_vae()`) on `data`.
-
-    Runs the full training loop internally — no training loop to write. Works
-    unchanged for either model type: an autoencoder trains against
-    reconstruction loss alone, a VAE against reconstruction + KL-divergence loss.
-    """
-    return _train_loop(
-        model,
-        data.images,
-        epochs=epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        shape_error_cls=ShapeError,
-    )
-
-
-def generate(vae_model, n: int) -> np.ndarray:
-    """Sample `n` new images from a trained `build_vae()` model's latent space.
-
-    Raises `GeneratorError` if `vae_model` was built by `build_autoencoder()`
-    instead — a plain autoencoder has no probabilistic prior to sample from.
-    """
-    if not getattr(vae_model, "is_variational", False):
-        raise GeneratorError(
-            "generate() requires a model built by build_vae(); got a "
-            "build_autoencoder() model — build_autoencoder() models have no "
-            "probabilistic prior to sample from."
-        )
-    return _sample_generate(vae_model, n)
+    model = _build_vae(input_shape, len(data.class_names), ShapeError)
+    model.class_names = list(data.class_names)
+    return model

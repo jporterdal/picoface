@@ -1,10 +1,4 @@
-## Purpose
-
-The student-assembled generative arm: building, training, and generating from
-an autoencoder-to-VAE progression, plus latent-space visualization, via
-simple function calls, within an old-CPU time budget.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: build_autoencoder()
 The system SHALL provide a `build_autoencoder()` function constructing a basic (non-variational) encoder/decoder model from a `Dataset`, as a pedagogical stepping stone toward the VAE. The model SHALL also carry a classification branch (Requirement: Joint classification branch), so that it both reconstructs and classifies. It SHALL accept the same call shape as `build_vae()` (Requirement: build_vae()), so the two are interchangeable at the call site.
@@ -24,13 +18,6 @@ The system SHALL provide a `build_vae()` function constructing a variational aut
 - **WHEN** a student swaps `build_autoencoder(data)` for `build_vae(data)`
 - **THEN** both models SHALL expose the same classification behavior (`evaluate`/`predict`) and differ only in having a probabilistic latent space that can be sampled
 
-### Requirement: Fixed 2-dimensional latent space
-Models built by `build_vae()` SHALL use a fixed, non-configurable 2-dimensional latent space. No student-facing parameter SHALL exist to change this for MVP.
-
-#### Scenario: Latent space is directly plottable
-- **WHEN** a student calls `show_latent_space()` (Requirement: show_latent_space()) on a model built by `build_vae()`
-- **THEN** the encoded points SHALL be plotted directly as (x, y) coordinates, with no dimensionality-reduction step applied
-
 ### Requirement: generate()
 The system SHALL provide a `generate()` function that samples new images from a trained VAE's latent space, given only the trained model and a requested count. `generate()` SHALL only accept models with a sampling capability, which are models built by `build_vae()`. Generation SHALL remain unconditional: it SHALL NOT take a class argument.
 
@@ -42,12 +29,7 @@ The system SHALL provide a `generate()` function that samples new images from a 
 - **WHEN** a student calls `generate(model, n=5)` where `model` was built by `build_autoencoder()` rather than `build_vae()`
 - **THEN** the system SHALL raise an explicit error naming the AE/VAE mismatch, rather than failing inside `_internals` on a missing sampling method
 
-### Requirement: show_latent_space()
-The system SHALL provide a visualization helper that displays a trained VAE's 2-dimensional latent space so students can inspect how shape classes are organized without analyzing the model's internals directly.
-
-#### Scenario: Student visualizes the latent space
-- **WHEN** a student calls `show_latent_space(vae_model, data)`
-- **THEN** a plot SHALL be displayed showing the distribution of encoded data points in latent space, colored by class
+## ADDED Requirements
 
 ### Requirement: Joint classification branch
 Models built by `build_autoencoder()` and `build_vae()` SHALL include a classification branch producing one score per class of the `Dataset` they were built from, in parallel with the generative branch and reading from the encoder's shared feature representation (not from the sampled or mean latent vector). `train()` SHALL optimize the generative objective and a cross-entropy classification loss together in a single training run, with the classification loss weight fixed internally and not student-configurable.
@@ -83,24 +65,3 @@ The classification branch SHALL NOT change what `show_latent_space()` plots: it 
 #### Scenario: Latent plot still one point per image
 - **WHEN** a student calls `show_latent_space(vae_model, data)` on a trained joint model
 - **THEN** one point per input image SHALL be plotted in 2D latent coordinates, colored by class, with no dimensionality-reduction step
-
-### Requirement: CPU training time budget
-Training a VAE built with `build_vae()` on the stub dataset via `train()` SHALL complete in no more than a few minutes on a CPU-only machine with no GPU. This budget applies only to `build_vae()` models; `build_autoencoder()` has no enforced budget for MVP (Requirement: build_autoencoder() is a nice-to-have).
-
-#### Scenario: VAE training completes within budget on CPU
-- **WHEN** `train()` is run on a CPU-only machine with a `build_vae()` model using the built-in stub dataset with default parameters
-- **THEN** training SHALL complete in under 5 minutes
-
-### Requirement: build_autoencoder() is a nice-to-have
-`build_autoencoder()` SHALL function correctly (Requirement: build_autoencoder()) but is not required to meet the CPU training time budget (Requirement: CPU training time budget) or any polish/documentation bar beyond correctness — it exists for API completeness and as an optional pedagogical stepping stone, not as a guaranteed student-facing workflow.
-
-#### Scenario: Autoencoder has no enforced time budget
-- **WHEN** `train()` is run with a `build_autoencoder()` model using the built-in stub dataset
-- **THEN** the system SHALL NOT enforce any wall-clock training time ceiling on this path
-
-### Requirement: GAN excluded from MVP
-The system SHALL NOT include a GAN implementation in this change; GAN support SHALL be documented as a future, optional extension rather than built now.
-
-#### Scenario: Documentation states GAN is out of scope
-- **WHEN** a student or instructor reads the generator arm's documentation
-- **THEN** it SHALL explicitly state that GAN-based generation is a possible future extension, not part of the current library

@@ -1,18 +1,16 @@
-"""Internal encoder/decoder architecture, VAE machinery, and training loop for the generator arm.
+"""Internal encoder/decoder architecture, VAE machinery, and classification head for the generator arm.
 
 Not part of the public API — `picoface.generator` wraps everything here
 behind named, student-facing functions. Nothing exported from this module
 is meant to be imported by student code. Shares no code with the classifier
-arm's `_internals/classifier_internals.py`.
+arm's `_internals/classifier_internals.py`; the shared training loop and
+verbs live in the arm-neutral `_internals/model_api.py`.
 """
 
-import time
-from dataclasses import dataclass, field
-
-import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+
+from picoface._internals.model_api import _Model
 
 # Fixed 2D latent space (Decision 2): keeps `show_latent_space()` a direct
 # (x, y) scatter with no dimensionality-reduction step / new dependency.
@@ -28,6 +26,20 @@ LATENT_DIM = 2
 # improving reconstruction — so this stays a light regularizer rather than
 # the dominant loss term.
 BETA = 0.01
+
+# Weight on the cross-entropy classification loss in the joint objective:
+# loss = reconstruction (+ BETA * KL for the VAE) + CLASSIFICATION_WEIGHT * CE.
+# Not student-facing. Head sits on the shared conv-trunk features, not on the
+# latent: in a spike on synthetic shapes (4 classes, varied position/size),
+# that gave the best classifier without hurting reconstruction, whereas a head
+# on `mu` clustered the latent but cost ~35% reconstruction. Accuracy and
+# reconstruction were insensitive to this weight across 0.1-10 (Adam
+# normalizes per-parameter, so CE's larger raw scale doesn't starve the
+# decoder), so 1.0 is the plain default. Validated on synthetic data only —
+# flagged in openspec/ROADMAP.md for revisiting in Phase 6 with BETA.
+CLASSIFICATION_WEIGHT = 1.0
+
+_HEAD_HIDDEN_SIZE = 32
 
 _CONV_KERNEL_SIZE = 3
 _CONV_PADDING = 1
@@ -85,21 +97,6 @@ class _ConvEncoderTrunk(nn.Module):
         return x.flatten(start_dim=1)
 
 
-class _Encoder(nn.Module):
-    """Conv trunk + linear projection directly to a `latent_dim`-vector z.
-
-    Used by the plain autoencoder, which has no probabilistic latent step.
-    """
-
-    def __init__(self, input_shape: tuple[int, int, int], latent_dim: int):
-        super().__init__()
-        self.trunk = _ConvEncoderTrunk(input_shape)
-        self.to_latent = nn.Linear(self.trunk.flatten_dim, latent_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.to_latent(self.trunk(x))
-
-
 class _Decoder(nn.Module):
     """Linear projection from latent space, then two transpose-conv->ReLU
     stride-2 blocks back up to `output_shape`, with a sigmoid output layer.
@@ -137,41 +134,105 @@ class _Decoder(nn.Module):
         return self.sigmoid(self.deconv2(x))
 
 
-def _build_encoder(input_shape: tuple[int, int, int], latent_dim: int) -> "_Encoder":
-    return _Encoder(input_shape, latent_dim)
+def _build_classification_head(flatten_dim: int, num_classes: int) -> nn.Sequential:
+    """Small MLP head (mirrors the classifier arm's FC head) on the trunk features."""
+    return nn.Sequential(
+        nn.Linear(flatten_dim, _HEAD_HIDDEN_SIZE),
+        nn.ReLU(),
+        nn.Linear(_HEAD_HIDDEN_SIZE, num_classes),
+    )
+
+
+def _classification_terms(
+    logits: torch.Tensor, labels: torch.Tensor
+) -> tuple[torch.Tensor, float]:
+    """Cross-entropy loss tensor and batch accuracy for `logits` against `labels`."""
+    ce = nn.functional.cross_entropy(logits, labels)
+    accuracy = (logits.argmax(dim=1) == labels).float().mean().item()
+    return ce, accuracy
 
 
 def _build_decoder(latent_dim: int, output_shape: tuple[int, int, int]) -> "_Decoder":
     return _Decoder(latent_dim, output_shape)
 
 
-class _Autoencoder(nn.Module):
-    """Plain (non-variational) encoder/decoder: a pedagogical step toward the VAE."""
+class _Autoencoder(_Model):
+    """Plain (non-variational) encoder/decoder: a pedagogical step toward the VAE.
 
-    def __init__(self, input_shape: tuple[int, int, int], latent_dim: int = LATENT_DIM):
+    Two parallel branches off the shared conv trunk: a deterministic latent
+    projection feeding the decoder, and a classification head.
+    """
+
+    capabilities = frozenset({"classify"})
+    built_by = "build_autoencoder()"
+
+    def __init__(
+        self,
+        input_shape: tuple[int, int, int],
+        num_classes: int,
+        shape_error_cls: type[Exception],
+        latent_dim: int = LATENT_DIM,
+    ):
         super().__init__()
         self.input_shape = input_shape
+        self.num_classes = num_classes
+        self.class_names = [f"class_{i}" for i in range(num_classes)]
+        self.shape_error_cls = shape_error_cls
         self.latent_dim = latent_dim
-        self.is_variational = False
-        self.encoder = _build_encoder(input_shape, latent_dim)
+        self.trunk = _ConvEncoderTrunk(input_shape)
+        self.to_latent = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.decoder = _build_decoder(latent_dim, input_shape)
+        self.head = _build_classification_head(self.trunk.flatten_dim, num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.encoder(x))
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.trunk(x)
+        return self.decoder(self.to_latent(features)), self.head(features)
+
+    def classify(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.trunk(x))
+
+    def training_step(
+        self, inputs: torch.Tensor, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        recon, logits = self(inputs)
+        recon_loss = nn.functional.mse_loss(recon, inputs)
+        cls_loss, accuracy = _classification_terms(logits, labels)
+        loss = recon_loss + CLASSIFICATION_WEIGHT * cls_loss
+        return loss, {
+            "reconstruction_loss": recon_loss.item(),
+            "classification_loss": cls_loss.item(),
+            "accuracy": accuracy,
+        }
 
 
-class _VAE(nn.Module):
-    """Variational autoencoder: probabilistic latent space + reparameterization."""
+class _VAE(_Model):
+    """Variational autoencoder: probabilistic latent space + reparameterization.
 
-    def __init__(self, input_shape: tuple[int, int, int], latent_dim: int = LATENT_DIM):
+    Two parallel branches off the shared conv trunk: a generative branch
+    (`mu`/`logvar` -> reparameterize -> decoder) and a classification head.
+    """
+
+    capabilities = frozenset({"classify", "sample", "latent_mean"})
+    built_by = "build_vae()"
+
+    def __init__(
+        self,
+        input_shape: tuple[int, int, int],
+        num_classes: int,
+        shape_error_cls: type[Exception],
+        latent_dim: int = LATENT_DIM,
+    ):
         super().__init__()
         self.input_shape = input_shape
+        self.num_classes = num_classes
+        self.class_names = [f"class_{i}" for i in range(num_classes)]
+        self.shape_error_cls = shape_error_cls
         self.latent_dim = latent_dim
-        self.is_variational = True
         self.trunk = _ConvEncoderTrunk(input_shape)
         self.fc_mu = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.trunk.flatten_dim, latent_dim)
         self.decoder = _build_decoder(latent_dim, input_shape)
+        self.head = _build_classification_head(self.trunk.flatten_dim, num_classes)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.trunk(x)
@@ -184,10 +245,38 @@ class _VAE(nn.Module):
 
     def forward(
         self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, logvar = self.encode(x)
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        features = self.trunk(x)
+        mu, logvar = self.fc_mu(features), self.fc_logvar(features)
         z = self.reparameterize(mu, logvar)
-        return self.decoder(z), mu, logvar
+        return self.decoder(z), mu, logvar, self.head(features)
+
+    def classify(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.trunk(x))
+
+    def encode_mu(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encode(x)[0]
+
+    def sample(self, n: int) -> torch.Tensor:
+        """Draw `n` vectors from N(0, I) in the fixed latent space and decode them."""
+        return self.decoder(torch.randn(n, self.latent_dim))
+
+    def training_step(
+        self, inputs: torch.Tensor, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        recon, mu, logvar, logits = self(inputs)
+        recon_loss = nn.functional.mse_loss(recon, inputs)
+        kl_loss = -0.5 * torch.mean(
+            torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        )
+        cls_loss, accuracy = _classification_terms(logits, labels)
+        loss = recon_loss + BETA * kl_loss + CLASSIFICATION_WEIGHT * cls_loss
+        return loss, {
+            "reconstruction_loss": recon_loss.item(),
+            "kl_loss": kl_loss.item(),
+            "classification_loss": cls_loss.item(),
+            "accuracy": accuracy,
+        }
 
 
 def _validate_decode_shape(model: nn.Module, input_shape, shape_error_cls: type[Exception]) -> None:
@@ -212,135 +301,17 @@ def _validate_decode_shape(model: nn.Module, input_shape, shape_error_cls: type[
     model.train()
 
 
-def _build_autoencoder(input_shape: tuple[int, int, int], shape_error_cls: type[Exception]) -> "_Autoencoder":
-    model = _Autoencoder(input_shape, LATENT_DIM)
+def _build_autoencoder(
+    input_shape: tuple[int, int, int], num_classes: int, shape_error_cls: type[Exception]
+) -> "_Autoencoder":
+    model = _Autoencoder(input_shape, num_classes, shape_error_cls, LATENT_DIM)
     _validate_decode_shape(model, input_shape, shape_error_cls)
     return model
 
 
-def _build_vae(input_shape: tuple[int, int, int], shape_error_cls: type[Exception]) -> "_VAE":
-    model = _VAE(input_shape, LATENT_DIM)
+def _build_vae(
+    input_shape: tuple[int, int, int], num_classes: int, shape_error_cls: type[Exception]
+) -> "_VAE":
+    model = _VAE(input_shape, num_classes, shape_error_cls, LATENT_DIM)
     _validate_decode_shape(model, input_shape, shape_error_cls)
     return model
-
-
-def _preprocess(
-    images: np.ndarray | torch.Tensor, input_shape, shape_error_cls: type[Exception]
-) -> torch.Tensor:
-    """Validate shape, preprocess NHWC uint8 images to NCHW float32 in [0, 1].
-
-    Local to this module — duplicated from, not imported from, the
-    classifier arm's equivalent (Decision 9).
-    """
-    tensor = images if isinstance(images, torch.Tensor) else torch.from_numpy(np.asarray(images))
-
-    if tensor.ndim == 3:
-        tensor = tensor.unsqueeze(0)
-
-    image_shape = tuple(tensor.shape[1:])
-    if image_shape != tuple(input_shape):
-        raise shape_error_cls(
-            f"image shape {image_shape} does not match this model's expected "
-            f"input_shape {tuple(input_shape)}."
-        )
-
-    return tensor.permute(0, 3, 1, 2).float() / 255.0
-
-
-def _encode_mu(model, images, shape_error_cls: type[Exception]) -> np.ndarray:
-    """Return the VAE encoder's mean output (not a sampled z) for `images`."""
-    tensor = _preprocess(images, model.input_shape, shape_error_cls)
-    model.eval()
-    with torch.no_grad():
-        mu, _logvar = model.encode(tensor)
-    return mu.numpy()
-
-
-def _sample_generate(model, n: int) -> np.ndarray:
-    """Draw `n` vectors from N(0, I) in the fixed latent space and decode them."""
-    model.eval()
-    with torch.no_grad():
-        z = torch.randn(n, model.latent_dim)
-        decoded = model.decoder(z)
-    images = decoded.permute(0, 2, 3, 1).numpy() * 255.0
-    return np.clip(images, 0, 255).astype(np.uint8)
-
-
-@dataclass
-class TrainingHistory:
-    """Per-epoch loss record and total wall-clock training duration.
-
-    `reconstruction_loss`/`kl_loss` are populated only for VAE models
-    (empty lists for a plain autoencoder).
-    """
-
-    loss: list[float] = field(default_factory=list)
-    wall_clock_seconds: float = 0.0
-    reconstruction_loss: list[float] = field(default_factory=list)
-    kl_loss: list[float] = field(default_factory=list)
-
-
-def _train_loop(
-    model,
-    images: np.ndarray,
-    epochs: int,
-    batch_size: int,
-    learning_rate: float,
-    shape_error_cls: type[Exception],
-) -> TrainingHistory:
-    """Run the full training loop: DataLoader batching, Adam, CPU.
-
-    Dispatches on `model.is_variational` for loss selection: MSE
-    reconstruction-only (autoencoder) vs. reconstruction + BETA * KL (VAE).
-    """
-    device = torch.device("cpu")
-    model.to(device)
-    model.train()
-
-    dataset = TensorDataset(torch.from_numpy(np.asarray(images)))
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    history = TrainingHistory()
-    start_time = time.monotonic()
-
-    for _epoch in range(epochs):
-        epoch_loss = 0.0
-        epoch_recon = 0.0
-        epoch_kl = 0.0
-        num_batches = 0
-
-        for (batch_images,) in loader:
-            optimizer.zero_grad()
-            inputs = _preprocess(batch_images, model.input_shape, shape_error_cls).to(device)
-
-            if model.is_variational:
-                recon, mu, logvar = model(inputs)
-                recon_loss = nn.functional.mse_loss(recon, inputs)
-                kl_loss = -0.5 * torch.mean(
-                    torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-                )
-                loss = recon_loss + BETA * kl_loss
-            else:
-                recon = model(inputs)
-                recon_loss = nn.functional.mse_loss(recon, inputs)
-                kl_loss = None
-                loss = recon_loss
-
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            epoch_recon += recon_loss.item()
-            if kl_loss is not None:
-                epoch_kl += kl_loss.item()
-            num_batches += 1
-
-        history.loss.append(epoch_loss / max(num_batches, 1))
-        if model.is_variational:
-            history.reconstruction_loss.append(epoch_recon / max(num_batches, 1))
-            history.kl_loss.append(epoch_kl / max(num_batches, 1))
-
-    history.wall_clock_seconds = time.monotonic() - start_time
-    return history

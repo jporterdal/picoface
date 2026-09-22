@@ -1,35 +1,4 @@
-## Purpose
-
-The student-assembled classification arm: building, training, evaluating,
-and running inference with a small CNN classifier via simple function
-calls, within an old-CPU time budget.
-
-## Requirements
-
-### Requirement: build_classifier()
-The system SHALL provide a `build_classifier(data)` function that constructs a small CNN classifier sized for the given `Dataset`'s class count and image shape, without requiring the caller to define network layers or derive shape/class-count values themselves.
-
-#### Scenario: Student builds a classifier from a dataset
-- **WHEN** a student calls `build_classifier(data)` with a loaded or stub `Dataset`
-- **THEN** they SHALL receive a trainable model object without writing any PyTorch `nn.Module` code and without deriving `num_classes` or `input_shape` themselves
-
-#### Scenario: Model shape matches the dataset's class count
-- **WHEN** a model is built from a `Dataset` with N class names
-- **THEN** the model's output SHALL have exactly N class scores per input image
-
-### Requirement: build_classifier_from_shape()
-The system SHALL provide a `build_classifier_from_shape(num_classes, input_shape)` function that constructs the same kind of CNN classifier from an explicit class count and image shape, for use when no `Dataset` is yet available.
-
-#### Scenario: Student builds a classifier without a dataset in hand
-- **WHEN** a student calls `build_classifier_from_shape(num_classes=3, input_shape=(16, 16, 3))`
-- **THEN** they SHALL receive a trainable model object equivalent to one that `build_classifier()` would return for a `Dataset` with matching class count and image shape
-
-### Requirement: Minimum input size is validated at build time
-The system SHALL reject an `input_shape` too small for the fixed CNN architecture to process, at the point `build_classifier()` or `build_classifier_from_shape()` is called, with an explicit error identifying the minimum viable size rather than failing later during training.
-
-#### Scenario: Student passes a too-small input shape
-- **WHEN** a student calls `build_classifier_from_shape(num_classes=2, input_shape=(2, 2, 3))`
-- **THEN** the system SHALL raise a clear error naming the minimum viable input size, instead of failing inside training
+## MODIFIED Requirements
 
 ### Requirement: Data/model shape consistency is validated
 The system SHALL reject an image (whether from a `Dataset` passed to `train()`/`evaluate()`, or a single image passed to `predict()`) whose shape does not match the model's expected input shape, and SHALL reject a `Dataset` passed to `train()`/`evaluate()` whose class count does not match the model's, both with a clear error rather than an internal framework failure. This applies to any model accepted by these functions (Requirement: Model-agnostic evaluate() and predict() in `model-interface`), not only CNN classifiers.
@@ -75,20 +44,6 @@ The system SHALL provide `evaluate(model, data)` to report classification accura
 #### Scenario: Same functions work on a joint model
 - **WHEN** a student calls `evaluate(model, data)` and `predict(model, image)` on a trained `build_vae()` model
 - **THEN** the functions SHALL return accuracy and a class name respectively, with no different call shape from the CNN case
-
-### Requirement: CPU training time budget
-Training a classifier built with `build_classifier()` on the stub dataset via `train()` with default parameters SHALL complete in no more than a few minutes on a CPU-only machine with no GPU.
-
-#### Scenario: Training completes within budget on CPU
-- **WHEN** `train()` is run on a CPU-only machine using the built-in stub dataset with default parameters
-- **THEN** training SHALL complete in under 5 minutes
-
-### Requirement: Training-loop internals hidden
-All model-definition and training-loop code SHALL live outside the public API surface (in a non-public internals module), such that students calling the public functions are never required to read or understand it.
-
-#### Scenario: Public API has no exposed internals
-- **WHEN** a student inspects the public `picoface.classifier` module
-- **THEN** they SHALL find only the named entry-point functions (`build_classifier`, `build_classifier_from_shape`, `train`, `evaluate`, `predict`) and no `nn.Module` subclasses or raw training-loop code
 
 ### Requirement: Training-history visualization
 The system SHALL provide a viz helper function that plots a training history (loss per epoch, and classification accuracy per epoch when the history contains it) via a single function call, without the student writing plotting code.
