@@ -61,8 +61,32 @@ The system SHALL provide a `train(model, data, epochs=10, batch_size=16, learnin
 - **WHEN** a student trains a `build_classifier()` model with default parameters
 - **THEN** it SHALL be optimized on classification loss alone, with the same defaults as before this change
 
+### Requirement: The CNN classifier is the project's independent external validator
+The CNN classifier built by `build_classifier()` SHALL remain a separately-constructed, separately-trained model that shares no learned parameters with the generative model built by `build_vae()`. Its role is to provide an independent judgement of generated image quality: a measurement in which the generative model grades its own output shares an encoder with the thing being graded and is therefore not evidence of quality.
+
+This capability SHALL remain interoperable with the rest of the project — consuming the same `Dataset` contract and exposing the same public call shapes (`train()`, `evaluate()`, `predict()`) as the generative arm — even though it is no longer the primary student-facing classification path.
+
+#### Scenario: Generated images are scored by an independent model
+- **WHEN** images produced by a trained `build_vae()` model are classified by a separately-trained `build_classifier()` model
+- **THEN** the resulting accuracy SHALL reflect a judgement made by a model that shares no learned parameters with the generator
+
+#### Scenario: The classifier keeps pace with the shared dataset contract
+- **WHEN** a `Dataset` valid for the generative arm is passed to `build_classifier()` and `train()`
+- **THEN** it SHALL be accepted without conversion or adaptation, using the same call shapes as the generative arm
+
+### Requirement: Classification accuracy is regression-guarded
+The project's tests SHALL assert classifier accuracy against a bound that a broken model would fail, measured on data held out from training. An assertion that merely confirms accuracy lies within the range 0 to 1 SHALL NOT be treated as satisfying this requirement, as it holds for any value and detects no regression.
+
+#### Scenario: Accuracy is measured on unseen data
+- **WHEN** classifier accuracy is asserted in the project's tests
+- **THEN** it SHALL be computed on a dataset disjoint from the one used for training, rather than on the training data itself
+
+#### Scenario: A broken model fails the assertion
+- **WHEN** a classifier that predicts without regard to its input is evaluated
+- **THEN** the accuracy assertion SHALL fail
+
 ### Requirement: evaluate() and predict()
-The system SHALL provide `evaluate(model, data)` to report classification accuracy on a `Dataset`, and `predict(model, image)` to classify a single new image and return its class name, both without exposing internal tensor manipulation to the caller. Both SHALL accept any model with a classification capability, including models built by `build_autoencoder()` and `build_vae()` (see `model-interface`).
+The system SHALL provide `evaluate(model, data)` to report classification accuracy on a `Dataset`, and `predict(model, image)` to classify a single new image and return its class name, both without exposing internal tensor manipulation to the caller. Both SHALL accept any model with a classification capability — a model built by `build_classifier()` or by `build_vae()` (see `model-interface`). Models built by `build_autoencoder()` do not classify.
 
 #### Scenario: Student evaluates a trained classifier
 - **WHEN** a student calls `evaluate(model, data)` after training
@@ -98,7 +122,7 @@ The system SHALL provide a viz helper function that plots a training history (lo
 - **THEN** a loss-vs-epoch chart SHALL be produced without the student manipulating matplotlib directly
 
 #### Scenario: Accuracy is plotted when available
-- **WHEN** the helper is given the history of a joint model trained with a classification branch
+- **WHEN** the helper is given the history of a `build_vae()` model, which records classification accuracy
 - **THEN** the resulting figure SHALL also show classification accuracy per epoch
 
 #### Scenario: Classifier-only history plots as before
