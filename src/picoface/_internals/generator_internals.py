@@ -14,9 +14,15 @@ from picoface._internals.model_api import _Model
 
 # Latent dimensionality (phase3c Decision 2): no longer pinned to 2 now that
 # `show_latent_space()` is gone and classification is routed through the
-# latent. Provisional — see the phase3c diagnostics record; Phase 6 owns the
-# final value.
-LATENT_DIM = 8
+# latent. Retuned in phase6 (diagnostics.md): the provisional value of 8 was
+# an information bottleneck that squeezed out reconstruction-relevant detail
+# in favor of classification-relevant structure, most visibly on non-round
+# classes. Reconstruction and classify_generated() agreement both roughly
+# double between 8 and 64-128 (held-out classification also improves, so
+# there is no accuracy trade-off), with diminishing returns above 128 and
+# two classes (star, smiley) still unresolved even at 192 — that residual is
+# a decoder-capacity question, not a latent-capacity one (diagnostics.md).
+LATENT_DIM = 128
 
 # Fraction of training over which the KL weight ramps linearly from 0 to 1
 # (phase3c Decision 3). The end point, 1, is the ELBO weight given the per-pixel loss
@@ -42,6 +48,14 @@ LOG_VAR_FLOOR = -6.0
 LOG_VAR_LR_MULTIPLIER = 10
 
 _HEAD_HIDDEN_SIZE = 32
+
+# Decoder-only intermediate channel count (phase6 diagnostics.md, "pushing on
+# star/smiley"). Originally reused `_ENC1_OUT_CHANNELS` (8); widening just the
+# decoder's own middle layer, independent of the encoder, was the fix for the
+# two classes latent_dim and loss-balance tuning left behind: reconstruction
+# agreement roughly doubles for both (confirmed over 3 seeds, n=50), with the
+# other five classes unaffected. Diminishing returns above 128.
+_DECODER_MID_CHANNELS = 128
 
 _CONV_KERNEL_SIZE = 3
 _CONV_PADDING = 1
@@ -112,14 +126,14 @@ class _Decoder(nn.Module):
         self.fc = nn.Linear(latent_dim, feat_channels * feat_height * feat_width)
         self.deconv1 = nn.ConvTranspose2d(
             feat_channels,
-            _ENC1_OUT_CHANNELS,
+            _DECODER_MID_CHANNELS,
             kernel_size=_CONV_KERNEL_SIZE,
             stride=_CONV_STRIDE,
             padding=_CONV_PADDING,
             output_padding=1,
         )
         self.deconv2 = nn.ConvTranspose2d(
-            _ENC1_OUT_CHANNELS,
+            _DECODER_MID_CHANNELS,
             out_channels,
             kernel_size=_CONV_KERNEL_SIZE,
             stride=_CONV_STRIDE,
