@@ -101,8 +101,10 @@ def test_class_clusters_are_latent_vectors_that_separate_the_classes(trained):
     clusters = _class_latent_clusters(vae, data)
 
     assert list(clusters) == data.class_names
-    means = torch.stack([mean for mean, _std in clusters.values()])
-    spreads = torch.stack([std for _mean, std in clusters.values()])
+    for class_mu in clusters.values():
+        assert tuple(class_mu.shape)[1:] == (vae.latent_dim,)
+    means = torch.stack([class_mu.mean(dim=0) for class_mu in clusters.values()])
+    spreads = torch.stack([class_mu.std(dim=0, correction=0) for class_mu in clusters.values()])
     assert tuple(means.shape) == (len(SHAPE_CLASSES), vae.latent_dim)
     # Loose by design: the closest pair of class means sat 1.3-3.2x the
     # typical within-class spread over 5 seeds.

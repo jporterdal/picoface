@@ -26,12 +26,17 @@ ASCENT_BLUR_EVERY = 10
 ASCENT_BLUR_SIGMA = 1.0
 _ASCENT_BLUR_KERNEL_SIZE = 5
 
-# Scale factor on each class's per-dimension latent spread when sampling around
-# its cluster (phase6 diagnostics.md): 1.0 (the full observed spread) draws
-# from the edges of a class's cluster more often than a slightly tighter draw
-# does, which costs `classify_generated()` agreement. 0.6-0.8 consistently
-# beat 1.0 across 6 sampling seeds; 0.75 is the middle of that range.
-CLUSTER_SAMPLE_SPREAD = 0.75
+# Scale factor on each class's per-dimension latent spread, applied as jitter
+# around a resampled real point rather than spread around a parametric mean
+# (phase7 capstone-linkage-sampling-fix/diagnostics.md): classes with strong
+# rotation-driven within-class variation (star, smiley) have a class mean that
+# is itself a smeared multi-orientation composite the decoder renders poorly,
+# so sampling parametrically around that mean — at any spread or covariance
+# shape — never generates them well. Resampling an actual encoded point sidesteps
+# that; the jitter magnitude barely matters across 0.05-0.15 (statistically
+# indistinguishable over 5 training seeds x 3 sampling seeds each), so 0.1 is
+# used as that plateau's midpoint.
+CLUSTER_SAMPLE_JITTER = 0.1
 
 
 def _gaussian_blur_kernel(channels: int, sigma: float, ksize: int) -> torch.Tensor:
@@ -42,8 +47,8 @@ def _gaussian_blur_kernel(channels: int, sigma: float, ksize: int) -> torch.Tens
     return kernel.view(1, 1, ksize, ksize).repeat(channels, 1, 1, 1)
 
 
-def _class_latent_clusters(model: _Model, data) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-    """Per-class mean and standard deviation of `model`'s latent means over `data`'s images."""
+def _class_latent_clusters(model: _Model, data) -> dict[str, torch.Tensor]:
+    """Per-class latent means (`model`'s encoded `mu`) over `data`'s images."""
     model.eval()
     with torch.no_grad():
         mu = model.encode_mu(_preprocess_images(data.images, model))
@@ -57,18 +62,20 @@ def _class_latent_clusters(model: _Model, data) -> dict[str, tuple[torch.Tensor,
                 f"data has no images of class {name!r}, so there is nothing to locate "
                 "that class in the generator's latent space from."
             )
-        clusters[name] = (class_mu.mean(dim=0), class_mu.std(dim=0, correction=0))
+        clusters[name] = class_mu
     return clusters
 
 
 def _sample_near_clusters(
-    model: _Model, clusters: dict[str, tuple[torch.Tensor, torch.Tensor]], n: int
+    model: _Model, clusters: dict[str, torch.Tensor], n: int
 ) -> tuple[np.ndarray, list[str]]:
-    """`n` decoded images per class, drawn around each class's latent cluster."""
+    """`n` decoded images per class, jittered around real points in that class's cluster."""
     latents = []
     intended = []
-    for name, (mean, std) in clusters.items():
-        latents.append(mean + CLUSTER_SAMPLE_SPREAD * std * torch.randn(n, mean.shape[0]))
+    for name, class_mu in clusters.items():
+        picked = class_mu[torch.randint(0, len(class_mu), (n,))]
+        std = class_mu.std(dim=0, correction=0)
+        latents.append(picked + CLUSTER_SAMPLE_JITTER * std * torch.randn(n, class_mu.shape[1]))
         intended.extend([name] * n)
 
     model.eval()
