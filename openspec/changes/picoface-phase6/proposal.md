@@ -1,0 +1,40 @@
+## Why
+
+Phase 5's feasibility smoke check (`openspec/changes/archive/2026-09-23-picoface-phase5/diagnostics.md`) ran the existing classifier and VAE, unmodified, against the first real dataset the project has ever had. Classification is strong (CNN 0.95–0.97, VAE 0.94–0.95 held-out), but generation is not: `classify_generated()` agreement is only 0.32–0.35, and the VAE's decoder renders every class but the round ones (circle, ring) as an unrecognizable blob. The diagnostics record shows this is specifically a decoder problem, not a data or latent problem — the VAE's own classification head reads the same latent at 0.94–0.95, and neither doubling the training data nor doubling the epochs moved the blobs at all. Phase 3c's design already flagged the likely cause in advance: the learned reconstruction/classification loss balance can starve reconstruction once classification is the easier task, bounded only by a floor on the learned log-variances that has never been checked against a dataset with more than one optimizer step per epoch.
+
+Every arm has so far been proven only against the synthetic stub dataset. Phase 6 is the ROADMAP's designated integration phase: swap the real Dataset Forge export in for the stub, and use it to retune the handful of VAE hyperparameters Phase 3c left as provisional, before Phase 7 commits to student-facing docs and packaging.
+
+## What Changes
+
+- Swap the real Dataset Forge export in for the stub dataset across the classifier, generator, and linkage code paths and their existing tests. The stub dataset itself is not removed — it stays available for fast unit/plumbing tests (`data-contract`'s existing stub-generator requirement is unaffected) — but the tests and checks that currently validate against the stub as a stand-in for real content now run against the real export instead.
+- Retune the VAE's loss-balance hyperparameters against the real dataset, in this order, stopping early if an earlier step already resolves the blob problem:
+  1. the learned log-variances' floor and their learning-rate multiplier (currently a fixed floor and a 10× multiplier, chosen against the stub's 1-step epochs);
+  2. the KL annealing schedule's length and shape (its end point stays fixed at a weight of 1, per the existing `shape-generator` ELBO requirement);
+  3. `latent_dim` (currently a provisional 8), now that real steps-per-epoch are known.
+- Record, in a Phase 6 diagnostics file (following Phase 5's precedent), whether that tuning moves `classify_generated()`/reconstruction agreement off the "only round classes work" floor, and by how much. **This phase does not change decoder architecture or add label-conditioning.** If tuning alone doesn't resolve the blobs, that is written up as an explicit, named open question for a later change rather than built here.
+- Retune secondary, independent knobs against the real dataset: whether to add decoupled weight decay (`AdamW`, excluding the log-variances), the classification head's architecture, and whether to move Dataset Forge's default training-set size from 1,000 to 2,000 images/class (Phase 5 found this is a cheap classification-only win with no effect on the decoder problem — a config default change, not a spec change).
+- Verify `train()`'s default `epochs=10` still gives high classification accuracy on the real dataset (the stub's 1-optimizer-step-per-epoch was too small to exercise this default meaningfully) and verify the "seconds-to-minutes on old CPU" binding constraint still holds using `train()`'s actual defaults end-to-end, not just Phase 5's ad hoc smoke-check script. If either investigation concludes a different default is needed, update it as part of this change.
+- Retune `activation_maximize()` (regularization, ascent step count/learning rate) and `classify_generated()`'s latent-cluster sampling once the decoder-facing tuning above has landed, since both consume the VAE's (possibly changed) decoder output.
+- Update `openspec/ROADMAP.md` to mark Phase 6 done and resolve or re-scope the open questions it currently defers to this phase.
+
+## Capabilities
+
+### New Capabilities
+None.
+
+### Modified Capabilities
+- `shape-classifier`: the CPU training-time budget requirement, currently scoped to "the stub dataset," is validated and reworded to also cover the real Dataset Forge dataset.
+- `shape-generator`: the CPU training-time budget requirement is validated and reworded the same way. (The log-variance floor/multiplier, KL-schedule length/shape, and `latent_dim` this phase retunes are internal constants nowhere named in spec text, so retuning them is not a spec-level change; the requirements governing learned weighting, KL annealing, and the per-pixel ELBO are unchanged in behavior.)
+
+Neither `model-interface`'s nor `shape-classifier`'s `train(epochs=10, batch_size=16, learning_rate=1e-3)` defaults are changed by this delta. Whether the real dataset warrants different defaults is exactly what this phase's epoch/time-budget investigation resolves; if it concludes a default should change, that requirement text is updated via `opsx:update` before this change is archived, the same way Phase 5 folded its 24→28 resolution decision in before archiving rather than pre-committing to it at proposal time.
+
+## Impact
+
+- `src/picoface/_internals/generator_internals.py`: `LATENT_DIM`, `LOG_VAR_FLOOR`, `LOG_VAR_LR_MULTIPLIER`, and the KL annealing schedule are retuned against the real dataset; no change to the module's public shape.
+- `src/picoface/_internals/classifier_internals.py`, `linkage_internals.py`: touched only if the classification-head-architecture or `activation_maximize()`/`classify_generated()` retuning steps change internal constants there; no public signature changes anticipated.
+- `src/picoface/*` public modules and existing tests: test fixtures move from the stub dataset to a real Dataset Forge export for the checks this phase targets (accuracy bounds, time budget, capstone agreement); stub-based plumbing tests are unaffected.
+- `dataset_forge/configs/default.json`: possible change from 1,000 to 2,000 images/class, decided by this phase's investigation.
+- New diagnostics record for this phase (path TBD in design.md), following `openspec/changes/archive/2026-09-23-picoface-phase5/diagnostics.md`'s format.
+- `openspec/ROADMAP.md`: Phase 6 marked done; its currently-open questions (log-variance floor/multiplier, KL schedule, `latent_dim`, weight decay, classification head architecture, label-conditioned decoder feasibility, `activation_maximize()` regularization/steps, `classify_generated()` sampling, concrete accuracy/quality bar) updated to reflect what this phase resolves versus what it explicitly defers.
+- If the `train()` default-epoch investigation concludes a different default is warranted, `model-interface` and `shape-classifier` gain a corresponding spec delta, folded in via `opsx:update` before this change archives rather than committed at proposal time.
+- No change to `dataset_forge/`'s renderer, taxonomy, or export/validation logic (Phase 5's scope); no change to the `data-contract` or `capstone-linkage` capability contracts.
