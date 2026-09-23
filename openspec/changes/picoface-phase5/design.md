@@ -36,6 +36,7 @@ dataset_forge/
   render.py         variation sampling, supersampled mask, shading, noise
   export.py         split generation, .npz/classes.json/manifest writing
   validate.py       post-export checks and baseline report
+  contact_sheet.py  one row of renders per class, for checking by eye
   smoke.py          one-off feasibility check (Decision 7)
   configs/default.json
   tests/
@@ -57,7 +58,9 @@ The mask is downsampled to the target resolution with a box filter, so each outp
 
 Keeping draw functions shade-free is what makes the taxonomy extensible (spec: Extensible class taxonomy). A new class never deals with shading, noise, variation ranges, or anti-aliasing. It also gives validation an exact ink fraction for free during testing, although the gate itself only ever reads exported pixels (Decision 5).
 
-Rotation is applied to vertex coordinates (polygons, star, eye positions, mouth-arc centre), not by rotating a raster, so edges stay sharp before downsampling. Circles and rings are rotation-invariant and ignore the angle. The smiley's mouth is drawn with `ImageDraw.arc` with its start and end angles offset by the rotation, around a mouth centre that is itself rotated about the face centre.
+Pillow fills polygons and ellipses including their own outline, so ink can land up to one canvas pixel past a figure's true edge. Positions are therefore sampled so the circumscribed circle stays `1 + 1/supersample` output pixels from every edge (`ForgeConfig.clearance`), which keeps the outermost rows and columns ink-free. Found during implementation, when a vertex at exactly one pixel from the edge spilled one supersampled pixel (1/16 coverage) into the border.
+
+Rotation is applied to vertex coordinates (polygons, star, eye positions, mouth-arc centre), not by rotating a raster, so edges stay sharp before downsampling. Circles and rings are rotation-invariant and ignore the angle. The smiley's mouth is centred on the face, so rotating it only offsets the arc's start and end angles.
 
 **Alternatives considered:**
 - **Draw directly in gray shades per image** — rejected: every draw function would have to handle shading and cut-outs in background color, which is exactly what a new class should not have to know.
@@ -78,7 +81,7 @@ Every figure is sized by its circumscribed radius `R` (the radius of the smalles
 | `smiley` | `ring` plus two filled eyes and a mouth arc of stroke `s` |
 | `negative_smiley` | `circle` with two eyes and a mouth arc of stroke `s` cut out |
 
-The two smileys share one face-feature layout. Eyes are discs of radius `0.14 R` at `(±0.35 R, −0.25 R)` from the centre. The mouth is an arc of radius `0.5 R` centred at `(0, 0)`, spanning 30°–150° below the centre. This layout is provisional: task 2.4 checks legibility at 24×24 by eye and adjusts it before the default config is final. The outline stroke `s` is a configured fraction of `R` (default `0.18 R`, with slight jitter), with a floor of about one output pixel so outlines never vanish at the smallest sizes.
+The two smileys share one face-feature layout. Eyes are discs of radius `0.14 R` at `(±0.35 R, −0.25 R)` from the centre. The mouth is an arc of radius `0.5 R` centred at `(0, 0)`, spanning 30°–150° below the centre. It is drawn as a polygon band rather than with `ImageDraw.arc`, because `arc` only takes whole-pixel widths. Task 2.4 checked legibility on a contact sheet at 24×24 (the original default) and at 28×28: eyes and mouth read clearly in both smileys, so the layout is unchanged. The outline stroke `s` is a configured fraction of `R` (default `0.18 R`, with slight jitter), with a floor of about one output pixel so outlines never vanish at the smallest sizes.
 
 Any rotation of a square is a square, not a diamond, because there is no diamond class. That is what "defined without regard to rotation" buys. The two smileys are the only classes whose images depend on rotation, which is intended: the model has to recognize a face at any angle.
 
@@ -86,7 +89,18 @@ Any rotation of a square is a square, not a diamond, because there is no diamond
 
 Each image draws its background shade `b ~ U(b_min, b_max)` and its foreground shade `f ~ U(b + c_min, 255)`, with defaults `b ∈ [0, 159]` and `c_min = 96`. The image's mean brightness is `b + (f − b) × ink_fraction`, and the per-image shade spread swamps the ink-fraction difference between classes.
 
-A numeric sketch during exploration, using ideal figure areas, seven classes, ±10–20% radius jitter, and these shade ranges, put the best possible mean-brightness-only accuracy at 0.22–0.23 against 0.14 chance. The gate (chance + 0.1 = 0.243) uses a nearest-class-mean classifier, which does no better than that. The sketch leaves little margin, so task 3.4 measures on real exports and widens the shade ranges, or narrows the size jitter, if the default config's margin is thin.
+A numeric sketch during exploration, using ideal figure areas, seven classes, ±10–20% radius jitter, and these shade ranges, put the best possible mean-brightness-only accuracy at 0.22–0.23 against 0.14 chance. The gate (chance + 0.1 = 0.243) uses a nearest-class-mean classifier, which does no better than that. The sketch left little margin, so task 3.4 measured real exports of the default config (±15% radius jitter, 1,000 / 200 per class), at the original 24×24 default and again at 28×28. No adjustment was needed:
+
+| Resolution | Seed | Mean brightness only (gated, < 0.243) | Ink fraction only (baseline) |
+|---|---|---|---|
+| 24×24 | 0 | 0.179 | 0.392 |
+| 24×24 | 1 | 0.167 | 0.412 |
+| 24×24 | 2 | 0.179 | 0.389 |
+| 28×28 | 0 | 0.180 | 0.404 |
+| 28×28 | 1 | 0.171 | 0.412 |
+| 28×28 | 2 | 0.164 | 0.414 |
+
+Chance is 0.143. Margins to the gate are 0.06–0.08.
 
 Polarity is fixed, with the foreground always lighter. Otherwise "painted on the background" (`smiley`) and "cut out of the figure" (`negative_smiley`) could not be told apart without knowing which shade is the background.
 
@@ -107,7 +121,7 @@ Polarity is fixed, with the foreground always lighter. Otherwise "painted on the
 
 ### 6. Reproducibility: one seed, independent streams, pinned renderer
 
-One integer seed seeds a `numpy.random.SeedSequence`, which is split into independent child streams for the training split and the testing split. This makes the two splits independent even though they come from one seed, and the testing split doesn't change if the training count changes. All per-image parameters (rotation, radius, position, stroke, shades, noise) come from numpy. Pillow only rasterizes, which is deterministic for a given version.
+One integer seed seeds a `numpy.random.SeedSequence` per (split, class) pair, keyed by the split and a CRC of the class name. This makes every stream independent even though they come from one seed. The testing split doesn't change if the training count changes, and adding a class doesn't change the existing classes' images. All per-image parameters (rotation, radius, position, stroke, shades, noise) come from numpy. Pillow only rasterizes, which is deterministic for a given version.
 
 `requirements.txt` pins exact Pillow and numpy versions. The manifest records the full resolved config, the seed, the Forge's git commit (if available), and the Python, numpy, and Pillow versions. Byte-identical output is only promised within the same pinned environment (spec: Reproducible exports).
 
@@ -119,16 +133,16 @@ One integer seed seeds a `numpy.random.SeedSequence`, which is split into indepe
 - reports the CNN's per-class confusion (the smiley/circle pair is the one to watch);
 - reports `classify_generated()` agreement.
 
-It is a script, not a test: it takes tens of seconds to minutes, and its output is a measurement, not a pass/fail. Its results for the default export, on this development machine and noted as such, go in `diagnostics.md` in this change. That follows Phase 3c's diagnostics record, and it feeds Phase 6 and the 24→28 decision. It is the only part of the Forge that imports `picoface`'s training code.
+It is a script, not a test: it takes tens of seconds to minutes, and its output is a measurement, not a pass/fail. Its results for the default export, on this development machine and noted as such, go in `diagnostics.md` in this change. That follows Phase 3c's diagnostics record, and it feeds Phase 6. It also settled the default resolution: the plan started at 24×24, and the smoke check's results moved it to 28×28 (Decision 3's sizes are relative, so nothing else changed). It is the only part of the Forge that imports `picoface`'s training code.
 
 ### 8. Test isolation
 
-Forge tests live in `dataset_forge/tests/`. Its `conftest.py` calls `pytest.importorskip("PIL")`, so a plain `pytest` from the repo root collects and runs them when the Forge's requirements are installed, and skips them cleanly otherwise (spec: The project's test suite runs without the Forge's dependencies). Pillow is not added to `picoface`'s `dev` extras, which would blur the separation `packaging` requires. Tests use small configs (few images per class) so the suite stays fast. The seven-class default export is exercised once, at a reduced count, for the validation gate.
+Forge tests live in `dataset_forge/tests/`. Each test module calls `pytest.importorskip("PIL")` before its other imports, so a plain `pytest` from the repo root collects and runs them when the Forge's requirements are installed, and skips them cleanly otherwise (spec: The project's test suite runs without the Forge's dependencies). A single `conftest.py`-level skip was tried first. Pytest loads the conftests of `test*` folders under any path it is given before collection, and a skip raised there is reported as an error, so `pytest dataset_forge/tests` failed without Pillow. Pillow is not added to `picoface`'s `dev` extras, which would blur the separation `packaging` requires. Tests use small configs (few images per class) so the suite stays fast. The seven-class default export is exercised once, at a reduced count, for the validation gate.
 
 ## Risks / Trade-offs
 
 - **The mean-brightness gate's margin may be thin** (Decision 4's sketch put the best possible accuracy at 0.22–0.23 against a 0.243 gate) → Measured on real exports in task 3.4. Shade ranges and size jitter are config values and are adjusted until the default export clears the gate with margin. Area matching remains the fallback.
-- **Smiley features may not be legible at 24×24** (eyes about 1–2 px, the mouth one stroke wide) → Task 2.4 inspects rendered samples by eye before the config is finalized. The smoke check's per-class confusion shows whether the CNN separates `smiley`/`ring` and `negative_smiley`/`circle`. 28×28 is the planned relief if not.
+- **Smiley features may not be legible at 24×24** (eyes about 1–2 px, the mouth one stroke wide) → Task 2.4 inspects rendered samples by eye before the config is finalized. The smoke check's per-class confusion shows whether the CNN separates `smiley`/`ring` and `negative_smiley`/`circle`. **Outcome:** legible at 24×24, and both models classified both smileys at 0.87–1.00. The default moved to 28×28 anyway, for the VAE's accuracy on triangles and stars (`diagnostics.md`).
 - **VAE blur will hit the face classes hardest** in `classify_generated()`: blurring away a smiley's features leaves a ring or a circle → Expected, and recorded by the smoke check as a Phase 6 input rather than fixed here. It does not affect the Forge's contract.
 - **Ink fraction lets a model partly shortcut the task** → Accepted (Decision 5). The baseline is reported so Phase 6 can check that model accuracy sits well above it.
 - **Reproducibility depends on the pinned Pillow version**; a different Pillow could rasterize edges differently → The manifest records versions. Exact reproduction requires the pinned environment, and the spec promises no more.
@@ -141,4 +155,4 @@ Additive: nothing in `src/picoface/` or any existing spec changes, and no existi
 
 ## Open Questions
 
-- Final image counts per class. The default starts at 1,000 train / 200 test, and the smoke check may argue for fewer (time budget) or more (accuracy). This is a config value and changes nothing else.
+- Final image counts per class. The default is 1,000 train / 200 test. Doubling the training count doubles training time (still about 11 s for the CNN and 21 s for the VAE on the development machine) and lifts the VAE's held-out accuracy from 0.95 to about 0.985, but does nothing for generation (`diagnostics.md`, "Does more training data help?"). Left for Phase 6 to decide alongside the decoder work. It is a config value and changes nothing else.

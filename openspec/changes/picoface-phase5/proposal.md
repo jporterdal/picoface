@@ -12,7 +12,7 @@ Every arm of `picoface` has so far been proven only against the internal stub da
   - `negative_smiley`: a filled disc with eyes and mouth cut out to the background.
 
   Classes live in a registry keyed by name, so adding one later is one draw function plus one config entry.
-- Decide the initial format: 24×24 pixels, one grayscale channel. Resolution is a config value, so a later move to 28×28 (MNIST's size) is a config change, not a code change.
+- Decide the initial format: 28×28 pixels (MNIST's size), one grayscale channel. Resolution is a config value, so changing it is a config change, not a code change. The plan started at 24×24. The smoke check (below) showed the time headroom and a clear gain in the student's model's accuracy at 28×28, so the default was moved there before this change was finished (`diagnostics.md`).
 - Decide the variation and noise policy:
   - full 0–360° rotation;
   - slight size jitter;
@@ -27,7 +27,7 @@ Every arm of `picoface` has so far been proven only against the internal stub da
   - a gate that a mean-brightness-only classifier scores near chance, carried over from the stub's test.
 
   The accuracy of an ink-amount-only classifier is recorded as a baseline. It is not a gate: real shapes differ in area, and that signal is accepted rather than engineered away.
-- Run a one-time feasibility smoke check. Train the existing CNN and VAE at default settings on a default export, and record wall-clock time, held-out accuracy, per-class confusion, and `classify_generated()` agreement in `diagnostics.md`. This informs Phase 6 and the 24→28 decision. It is not tuning.
+- Run a one-time feasibility smoke check. Train the existing CNN and VAE at default settings on a default export, and record wall-clock time, held-out accuracy, per-class confusion, and `classify_generated()` agreement in `diagnostics.md`. This informs Phase 6 and informed the 24→28 decision. It is not tuning.
 - Generated datasets are never committed. Only the Forge and its default config are tracked; exports go to the already-gitignored `dataset_forge/output/`.
 
 ## Capabilities

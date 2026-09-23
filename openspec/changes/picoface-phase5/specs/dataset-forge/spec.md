@@ -52,14 +52,14 @@ A smiley's eyes and mouth SHALL make it look different from its own rotations. N
 - **THEN** the two images SHALL differ, and the difference SHALL lie within the figure's outline
 
 ### Requirement: Configurable resolution and color depth
-The exported image height, width, and channel count SHALL come from the configuration. The default configuration SHALL produce 24×24 single-channel (grayscale) images.
+The exported image height, width, and channel count SHALL come from the configuration. The default configuration SHALL produce 28×28 single-channel (grayscale) images.
 
-#### Scenario: Default images are 24×24 grayscale
+#### Scenario: Default images are 28×28 grayscale
 - **WHEN** Dataset Forge exports with its default configuration
-- **THEN** every exported image SHALL have shape 24×24×1 and dtype `uint8`
+- **THEN** every exported image SHALL have shape 28×28×1 and dtype `uint8`
 
 #### Scenario: Changing resolution is a configuration change
-- **WHEN** the configuration's resolution is changed (e.g. to 28×28)
+- **WHEN** the configuration's resolution is changed (e.g. to 24×24 or 32×32)
 - **THEN** the export SHALL have the new resolution, with no code change
 
 ### Requirement: Controlled per-image variation
