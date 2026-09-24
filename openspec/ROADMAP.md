@@ -91,7 +91,7 @@ Each phase assumes all prior phases are complete. A disposable stub dataset is u
 | 3c | Supervised VAE: one model that classifies and generates | `shape-generator`, `shape-classifier`, `model-interface`, `data-contract` (modified) | **Done** — archived at `openspec/changes/archive/2026-09-22-picoface-phase3c` |
 | 4 | Arms linkage | `capstone-linkage` (new); `model-interface` (modified) | **Done** — archived at `openspec/changes/archive/2026-09-22-picoface-phase4` |
 | 5 | Dataset Forge (Arm 3) + real content decisions | `dataset-forge` | **Done** — archived at `openspec/changes/archive/2026-09-23-picoface-phase5` |
-| 6 | End-to-end integration & tuning | — (no new capability; revisits 1–4) | **Done** — implemented at `openspec/changes/picoface-phase6` (diagnostics.md, tasks.md); archive location updated once archived |
+| 6 | End-to-end integration & tuning | — (no new capability; revisits 1–4) | **Done** — archived at `openspec/changes/archive/2026-09-23-picoface-phase6` |
 | 7 | Student docs & MVP packaging | `packaging` (remainder) | Not started |
 
 Phase 5 has no functional dependency on Phases 2–4 — it's placed late deliberately to keep content decisions open as long as possible, not because of a technical blocker. Could be parallelized with 2–4 if resourcing allows.
