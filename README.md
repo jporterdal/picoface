@@ -31,6 +31,7 @@ from picoface.generator import build_vae, generate
 from picoface.linkage import classify_generated, activation_maximize
 
 data = load_dataset("path/to/dataset.npz")  # see "Getting a dataset" below
+print(data.height, data.width, data.num_classes)  # image size and class count
 
 # Arm 1: an independent classifier, later used as the capstone's judge.
 classifier_model = build_classifier(data)
@@ -42,14 +43,19 @@ print(predict(classifier_model, data.images[0]))  # predicted class name
 vae_model = build_vae(data)
 train(vae_model, data)          # same train(), works on either model
 print(evaluate(vae_model, data))
-new_images = generate(vae_model, 8)  # sample 8 new images
+new_images = generate(vae_model, 8)  # a uint8 image array of 8 new images
 
 # Capstone: tie the two arms together.
 report = classify_generated(classifier_model, vae_model, data)
 print(report.overall)  # fraction of generated images the classifier agrees with
 
-am_image = activation_maximize(classifier_model, data.class_names[0])
+am_image = activation_maximize(classifier_model, data.class_names[0])  # one image array
 ```
+
+Images in picoface are uint8 numpy arrays ("image arrays") shaped (height,
+width, channels), or (count, height, width, channels) for several. `predict()`
+takes one image array, such as `data.images[0]`; the functions that take
+`data` need the dataset itself, from `load_dataset()`.
 
 `train`, `evaluate`, and `predict` are the same functions regardless of which
 model you built — `picoface.classifier` and `picoface.generator` both
@@ -64,9 +70,12 @@ class count and image shape, for when you don't have a `Dataset` object yet).
 ## Getting a dataset
 
 `load_dataset(path)` reads a dataset bundle: an `.npz` file (`images`: uint8
-N×H×W×C, `labels`: int N) plus a companion `classes.json` in the same
-directory mapping label index to class name. This is a fixed contract, not a
-guess — any `.npz`/`classes.json` pair matching it will load.
+N×H×W×C, with C = 1 for grayscale or 3 for RGB; `labels`: int N) plus a
+companion `classes.json` in the same directory mapping label numbers `"0"`,
+`"1"`, ... to class names. This is a fixed contract, not a guess — any
+`.npz`/`classes.json` pair matching it will load. A bundle that doesn't match
+raises a `DatasetError` naming the file, what was wrong, and how to fix it;
+a class with no images loads with a `DatasetWarning`.
 
 **picoface does not provide a real dataset itself.** Producing one is a
 separate, instructor-side step (the `dataset_forge/` tool in this repo, not

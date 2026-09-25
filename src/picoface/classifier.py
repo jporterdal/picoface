@@ -10,7 +10,13 @@ so they also work on models built by `picoface.generator`.
 
 from picoface._internals.classifier_internals import _build_classifier
 from picoface._internals.errors import BaseShapeError, CapabilityError
-from picoface._internals.model_api import TrainingHistory, evaluate, predict, train
+from picoface._internals.model_api import (
+    TrainingHistory,
+    _require_dataset,
+    evaluate,
+    predict,
+    train,
+)
 from picoface.datasets import Dataset
 
 __all__ = [
@@ -27,16 +33,17 @@ __all__ = [
 
 
 class ShapeError(BaseShapeError):
-    """Raised when an input shape or class count doesn't match what's expected."""
+    """Raised when an image's shape or format, or a class count, doesn't match what's expected."""
 
 
 def build_classifier(data: Dataset):
     """Build a CNN classifier sized for `data`'s class count and image shape.
 
-    Returns a trainable model object — no `nn.Module` code, no manual shape
+    `data` is a dataset from `load_dataset()`. Returns a trainable model object — no `nn.Module` code, no manual shape
     derivation required.
     """
-    num_classes = len(data.class_names)
+    _require_dataset(data, "build_classifier")
+    num_classes = data.num_classes
     input_shape = tuple(data.images.shape[1:])
     model = _build_classifier(num_classes, input_shape, ShapeError)
     model.class_names = list(data.class_names)

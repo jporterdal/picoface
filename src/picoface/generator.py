@@ -14,7 +14,14 @@ generation is a possible future extension, not part of this library.
 
 from picoface._internals.errors import BaseShapeError, CapabilityError, GeneratorError
 from picoface._internals.generator_internals import _build_autoencoder, _build_vae
-from picoface._internals.model_api import TrainingHistory, evaluate, generate, predict, train
+from picoface._internals.model_api import (
+    TrainingHistory,
+    _require_dataset,
+    evaluate,
+    generate,
+    predict,
+    train,
+)
 from picoface.datasets import Dataset
 
 __all__ = [
@@ -33,16 +40,19 @@ __all__ = [
 
 
 class ShapeError(BaseShapeError):
-    """Raised when an input/output image shape doesn't match what's expected."""
+    """Raised when an image's shape or format, or a class count, doesn't match what's expected."""
 
 
 def build_autoencoder(data: Dataset):
     """Build a plain (non-variational) encoder/decoder model sized for `data`.
 
+    `data` is a dataset from `load_dataset()`.
+
     Optional, and not a prerequisite for `build_vae()`. It only learns to
     reconstruct images: `train()` ignores `data`'s labels for it, and it can
     neither classify (`evaluate()`/`predict()`) nor `generate()`.
     """
+    _require_dataset(data, "build_autoencoder")
     input_shape = tuple(data.images.shape[1:])
     return _build_autoencoder(input_shape, ShapeError)
 
@@ -50,12 +60,13 @@ def build_autoencoder(data: Dataset):
 def build_vae(data: Dataset):
     """Build a supervised variational autoencoder (VAE) sized for `data`.
 
-    One `train()` call on labeled data teaches it to classify and to
+    `data` is a dataset from `load_dataset()`. One `train()` call on labeled data teaches it to classify and to
     generate: its classifier reads the same probabilistic latent space its
     generator samples from, so the trained model works with both
     `evaluate()`/`predict()` and `generate()`.
     """
+    _require_dataset(data, "build_vae")
     input_shape = tuple(data.images.shape[1:])
-    model = _build_vae(input_shape, len(data.class_names), ShapeError)
+    model = _build_vae(input_shape, data.num_classes, ShapeError)
     model.class_names = list(data.class_names)
     return model

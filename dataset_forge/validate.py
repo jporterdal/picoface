@@ -13,13 +13,14 @@ does — real shapes differ in area, and shape-aware models should beat it.
 import argparse
 import hashlib
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from dataset_forge.export import SPLITS, read_manifest, write_manifest
-from picoface.datasets import Dataset, load_dataset
+from picoface.datasets import Dataset, DatasetWarning, load_dataset
 
 # A single-statistic classifier may beat chance by less than this; the same
 # margin the stub dataset's brightness test uses (tests/test_stub_data.py).
@@ -95,7 +96,10 @@ def nearest_class_mean_accuracy(
 def _check_loads(out_dir: Path, config: dict) -> tuple[dict[str, Dataset], str]:
     expected_shape = (config["height"], config["width"], config["channels"])
     expected_classes = list(config["class_names"])
-    datasets = {split: load_dataset(out_dir / f"{split}.npz") for split in SPLITS}
+    # The balance check reports a class with no images itself, with counts.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DatasetWarning)
+        datasets = {split: load_dataset(out_dir / f"{split}.npz") for split in SPLITS}
     for split, data in datasets.items():
         shape = tuple(data.images.shape[1:])
         if shape != expected_shape:

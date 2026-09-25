@@ -173,6 +173,8 @@ An `/opsx:explore` session scoped this phase's five original pieces down to thre
 
 ## Open Questions
 
+- Whether `build_classifier_from_shape()` should reject channel counts other than 1 or 3 — **open, from `dataset-validation`'s audit:** datasets and `predict()` accept only grayscale (1) or RGB (3) images, but `build_classifier_from_shape()` still builds a model for any channel count, and such a model can never be trained or used. Left alone there because that change's scope excluded `build_classifier_from_shape()` (`dataset-validation/design.md`, Non-Goals; `audit.md`).
+
 - Exact shape taxonomy / class list — resolved in Phase 5.
 - Exact resolution and color depth — resolved in Phase 5, guided by "as small as possible while still recognizable to both a human and the classifier."
 - Noise/augmentation policy for Dataset Forge — resolved in Phase 5.

@@ -17,6 +17,7 @@ constrain its parameters after every optimizer step (`on_step_end`).
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,6 +25,8 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from picoface._internals.errors import CapabilityError, GeneratorError
+from picoface._internals.image_checks import check_image_array
+from picoface.datasets import Dataset
 
 
 @dataclass
@@ -112,9 +115,9 @@ class _Model(nn.Module):
                 f"image shape {image_shape} does not match this model's expected "
                 f"input_shape {tuple(self.input_shape)}."
             )
-        if self.num_classes is not None and len(data.class_names) != self.num_classes:
+        if self.num_classes is not None and data.num_classes != self.num_classes:
             raise self.shape_error_cls(
-                f"data has {len(data.class_names)} class(es) "
+                f"data has {data.num_classes} class(es) "
                 f"({data.class_names!r}), but this model expects "
                 f"{self.num_classes} class(es)."
             )
@@ -142,6 +145,27 @@ def _require_model(model, verb: str) -> None:
             f"{verb}() requires a model built by one of picoface's build_*() "
             f"functions; got {type(model).__name__!r}."
         )
+
+
+def _require_dataset(data, verb: str) -> None:
+    """Raise `TypeError`, naming what was given, unless `data` is a `Dataset`."""
+    if isinstance(data, Dataset):
+        return
+    if isinstance(data, (str, Path)):
+        raise TypeError(
+            f"{verb}() needs a dataset, but was given the file path {str(data)!r}. "
+            f"Load it first: data = load_dataset({str(data)!r})"
+        )
+    if hasattr(data, "getImage"):
+        given, single_image = "a picture", True
+    elif isinstance(data, np.ndarray):
+        given, single_image = f"an image array of shape {data.shape}", True
+    else:
+        given, single_image = f"a {type(data).__name__}", False
+    message = f"{verb}() needs a dataset from load_dataset(), but was given {given}."
+    if single_image:
+        message += " To classify a single image, use predict(model, image)."
+    raise TypeError(message)
 
 
 def _require_capability(model, capability: str, verb: str, error_cls=CapabilityError) -> None:
@@ -190,12 +214,14 @@ def _preprocess_images(images: np.ndarray | torch.Tensor, model: _Model) -> torc
 
 def train(
     model,
-    data,
+    data: Dataset,
     epochs: int = 10,
     batch_size: int = 16,
     learning_rate: float = 1e-3,
 ) -> TrainingHistory:
     """Train `model` on `data` for `epochs` epochs, returning a training history.
+
+    `data` is a dataset from `load_dataset()`.
 
     Runs the full training loop (batching, forward pass, loss, backward pass,
     optimizer step, epoch iteration) internally — no training loop to write.
@@ -204,6 +230,7 @@ def train(
     reconstruction, KL-divergence, and classification loss together).
     """
     _require_model(model, "train")
+    _require_dataset(data, "train")
     model.check_data(data)
     if model.num_classes is not None:
         model.class_names = list(data.class_names)
@@ -249,13 +276,16 @@ def train(
     return history
 
 
-def evaluate(model, data) -> float:
+def evaluate(model, data: Dataset) -> float:
     """Return classification accuracy (0 to 1) of `model` on `data`.
+
+    `data` is a dataset from `load_dataset()`.
 
     Raises `GeneratorError` (a `CapabilityError`) for a model that cannot
     classify, such as one built by `build_autoencoder()`.
     """
     _require_capability(model, "classify", "evaluate", error_cls=GeneratorError)
+    _require_dataset(data, "evaluate")
     model.check_data(data)
     model.eval()
 
@@ -268,12 +298,19 @@ def evaluate(model, data) -> float:
 
 
 def predict(model, image: np.ndarray) -> str:
-    """Return the predicted class name for a single `image`.
+    """Return the predicted class name for a single image array.
 
-    Raises `GeneratorError` (a `CapabilityError`) for a model that cannot
-    classify, such as one built by `build_autoencoder()`.
+    `image` is one uint8 image array shaped (height, width, channels), the
+    same size as the images the model was built for, e.g. `data.images[0]`.
+    Raises the model's `ShapeError` for an image array of the wrong shape,
+    dtype, or size, or for a whole batch of images; raises `GeneratorError`
+    (a `CapabilityError`) for a model that cannot classify, such as one built
+    by `build_autoencoder()`.
     """
     _require_capability(model, "classify", "predict", error_cls=GeneratorError)
+    # A picture (mediacomp-bridge) is converted to an image array here, so the
+    # checks below apply to it too.
+    _check_single_image(image, model)
     model.eval()
 
     with torch.no_grad():
@@ -283,8 +320,22 @@ def predict(model, image: np.ndarray) -> str:
     return model.class_names[predicted_index]
 
 
+def _check_single_image(image, model: _Model) -> None:
+    """Reject anything but one uint8 H×W×C image array, with the model's shape error."""
+    if isinstance(image, np.ndarray) and image.ndim == 4:
+        raise model.shape_error_cls(
+            f"predict() takes one image, but was given a batch of {image.shape[0]:,} "
+            f"images (shape {image.shape}). To score many labeled images, use "
+            f"evaluate(model, data); to classify one of them, use "
+            f"predict(model, data.images[i])."
+        )
+    check_image_array(image, name="image", batch=False, error_cls=model.shape_error_cls)
+
+
 def generate(model, n: int) -> np.ndarray:
     """Sample `n` new images from a trained `build_vae()` model's latent space.
+
+    Returns a uint8 image array shaped (n, height, width, channels).
 
     Raises `GeneratorError` for any model that cannot generate (e.g. one built
     by `build_autoencoder()`, which has no probabilistic prior to sample from).

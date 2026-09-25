@@ -20,7 +20,11 @@ from picoface._internals.linkage_internals import (
     _predicted_class_names,
     _sample_near_clusters,
 )
-from picoface._internals.model_api import _require_capability, _to_uint8_images
+from picoface._internals.model_api import (
+    _require_capability,
+    _require_dataset,
+    _to_uint8_images,
+)
 from picoface.datasets import Dataset
 
 __all__ = [
@@ -45,7 +49,8 @@ class GeneratedImagesReport:
     `per_class` maps each class name to the fraction of the images generated
     for that class that the classifier also called that class; `overall` is
     the same fraction across every generated image. `images[i]` was generated
-    for class `intended[i]` and classified as `predicted[i]`.
+    for class `intended[i]` and classified as `predicted[i]`; `images` is a
+    uint8 image array shaped (count, height, width, channels).
     """
 
     per_class: dict[str, float]
@@ -82,9 +87,10 @@ def classify_generated(
     `generator_model` (from `build_vae()`) makes each image from the part of
     its latent space where `data`'s images of that class sit, so every image
     has an intended class. `classifier_model` — trained separately, so it is
-    an independent judge — then classifies them. `data` is the labeled data
-    the generator was trained on.
+    an independent judge — then classifies them. `data` is the dataset (from
+    `load_dataset()`) the generator was trained on.
     """
+    _require_dataset(data, "classify_generated")
     _require_capability(classifier_model, "classify", "classify_generated")
     _require_capability(
         generator_model, "latent_access", "classify_generated", error_cls=GeneratorError
@@ -114,7 +120,8 @@ def activation_maximize(model, target_class: str) -> np.ndarray:
     Starts from random noise and repeatedly nudges the pixels in whatever
     direction raises the class's score, so the result shows what the model
     has learned to look for in that class. Works with any model that
-    classifies. Returns one image in the model's image shape.
+    classifies. Returns one uint8 image array shaped (height, width,
+    channels), the model's image shape.
     """
     _require_capability(model, "classify", "activation_maximize")
     if target_class not in model.class_names:
