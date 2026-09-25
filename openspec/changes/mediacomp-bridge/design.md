@@ -40,6 +40,14 @@ Duck typing keeps picoface independent of mediaComp's release cycle. The couplin
 
 Because mediaComp is on PyPI, the same tests can also run against the real `Picture` class whenever mediaComp is installed. An optional test module skips itself otherwise. It must skip, not fail, on any import error: mediaComp imports tkinter, pygame, and sounddevice at import time, and on a headless Linux machine without the PortAudio library, sounddevice raises `OSError` rather than `ImportError`. mediaComp stays out of `dev` extras, so a plain development install doesn't have to build wxPython.
 
+Verified during exploration with mediaComp 0.4.15: importing it never imports `wx` (only `show()` and `pictureTool()` need it). So the real-mediaComp tests run without wxPython, as long as tkinter and the PortAudio library are present. A test environment was built on the development machine (Debian trixie, no sudo) at `~/.venvs/picoface-mediacomp/`, as follows:
+- a venv from the system Python 3.13;
+- `tkinter` and `_tkinter` copied in from the `python3.13-tk` .deb;
+- `libportaudio2` and `libjack-jackd2-0` unpacked from their .debs with `dpkg -x` into `sysroot/`, plus a `libportaudio.so` symlink, because `ctypes.util.find_library()` looks for the unversioned name;
+- torch (CPU), `pip install -e ".[dev]"`, `pygame-ce` and `sounddevice`, then `pip install --no-deps mediaComp`, which skips wxPython.
+
+Its `run` script puts `sysroot/` on `LD_LIBRARY_PATH`. In that environment the existing suite passed, and real `makeEmptyPicture`, `addOvalFilled`, `getPixelAt`, `makePicture`, `getImage()` and `Picture(pil_image)` all worked. `makePicture()` kept an `"L"`-mode PNG in mode `"L"`, which confirms the Context note. On a machine with `sudo`, `apt install python3-tk libportaudio2` followed by `pip install --no-deps mediaComp pygame-ce sounddevice` does the same.
+
 ### 2. Helpers return a new image of the kind they were given
 Given a picture, the helpers return a new picture of the same type, always in RGB mode because mediaComp's pixel functions expect RGB. Given an array, they return an array.
 
@@ -47,7 +55,9 @@ Alternatives considered:
 - **Changing the picture in place through `setImage()`.** This is how mediaComp's own `addRect` works. Rejected: the instructor wants helpers that return values, and in-place changes make "compare before and after" exercises awkward.
 - **Always returning arrays.** Rejected: students would lose `show()` and `pictureTool()` on the result.
 
-Internally every helper works on a 2-D uint8 numpy array and converts only at the edges: picture to array on the way in, array to the input's kind on the way out. The shared conversion lives in a new internal module, `_internals/picture_internals.py`, which both `picoface.pictures` and `model_api.predict()` import. This keeps `_preprocess_images()` unchanged and strict.
+Internally every helper works on a uint8 H×W×C numpy array (C = 1 or 3) and converts only at the edges: picture to array on the way in, array to the input's kind on the way out. The helpers read a picture as H×W×3 RGB with no grayscale check, after Pillow's `convert("RGB")`, so pictures in `"L"`, `"P"`, or `"RGBA"` mode work too (alpha is ignored). An H×W array gets a channel axis on the way in, and the result is checked with `dataset-validation`'s `check_image_array(..., batch=False)`. Only `picture_to_array()`, and `predict()` through it, use the strict grayscale reader (Decision 3).
+
+The helpers accept colour so that preparation steps commute. A student's own grayscale function can run before or after `crop_and_center()` and `scale_down()`: `scale_down(make_greyscale(pic))` and `make_greyscale(scale_down(pic))` both work. The two orders agree up to rounding, because averaging and a channel-mean grayscale are both linear. They are not guaranteed to be bit-identical, and the tests allow for that. Grayscale is required only at the model boundary, where the image becomes H×W×1. The shared conversion lives in a new internal module, `_internals/picture_internals.py`, which both `picoface.pictures` and `model_api.predict()` import. `predict()` converts a picture before its image-array check (`_check_single_image()`, from `dataset-validation`), so a converted picture passes the same checks as an array, and both that check and `_preprocess_images()` stay unchanged and strict.
 
 ### 3. Grayscale is strictly checked, never converted
 `picture_to_array()` requires R == G == B at every pixel and reads one channel. Students' mediaComp grayscale loops set all three channels to the same integer. Pillow's drawing functions keep gray colours gray, and so does `save_images()` output. An exact check therefore fits how pictures are really made. The error message names the fix ("convert it to grayscale first") without doing it.
@@ -56,18 +66,20 @@ Alternative considered: a tolerance, such as a maximum channel spread of 2. Defe
 
 ### 4. `crop_and_center` estimates the figure's circumscribed circle
 The steps:
-1. **Background:** the median of the outermost rows and columns.
-2. **Figure:** every pixel differing from that shade by more than a threshold. A starting value is 48, half the Forge's `min_contrast`. It rejects the Forge's noise level (σ = 6) and faint scanning artifacts.
+1. **Background:** the per-channel median of the outermost rows and columns.
+2. **Figure:** every pixel whose brightness (the mean of its channels) differs from the background's brightness by more than a threshold. A starting value is 48, half the Forge's `min_contrast`. It rejects the Forge's noise level (σ = 6) and faint scanning artifacts. For a grayscale image this is simply the pixel's difference from the background shade.
 3. **Centre:** the centre of the figure's bounding box.
 4. **Radius:** the largest distance from that centre to any figure pixel. This approximates the smallest circle around the figure.
-5. **Canvas:** the side is `ceil(2·radius / 0.65)`, never smaller than needed to hold the figure unshrunk. It is filled with the background shade, with the figure's centre at the canvas centre.
+5. **Canvas:** the side is `ceil(2·radius / 0.65)`, never smaller than needed to hold the figure unshrunk. It is filled with the background colour, with the figure's centre at the canvas centre.
 
 The circle is used because the Forge sizes every class by its circumscribed radius (`radius_fraction` = 0.65 of half the side). Framing by bounding box instead would make triangles and stars larger than their training counterparts. Because the centre comes from the bounding box, the frame measures the background shade itself and so works for either polarity.
+
+Brightness is the channel mean, not the largest single-channel difference, so that `crop_and_center()` finds the same figure whether the student converts to grayscale before or after it (Decision 2), assuming the usual average-of-channels grayscale. The cost: a figure with the same brightness as its background, such as mid-red on mid-green, isn't found. It wouldn't be found after a grayscale conversion either, so the two orders at least fail the same way. The largest-channel difference finds such figures, but makes the result depend on the order of the steps.
 
 The constant 0.65 duplicates the Forge's default `radius_fraction`, because picoface can't import the Forge. A Forge test (the Forge may import picoface) asserts that the two match, so they can't drift apart unnoticed.
 
 ### 5. `scale_down` uses Pillow's box filter
-`Image.resize((size, size), Image.Resampling.BOX)` makes each output pixel the area-weighted mean of the input pixels it covers. That is the same averaging the Forge uses to anti-alias its supersampled canvas, and it handles size ratios that aren't whole numbers.
+`Image.resize((size, size), Image.Resampling.BOX)` makes each output pixel the area-weighted mean of the input pixels it covers, separately in each channel. Every channel of a gray RGB picture goes through the same arithmetic, so a gray picture stays exactly gray (R == G == B) and still passes `picture_to_array()`. That is the same averaging the Forge uses to anti-alias its supersampled canvas, and it handles size ratios that aren't whole numbers.
 
 Alternatives considered:
 - **NEAREST.** Thin outlines vanish.
@@ -123,6 +135,7 @@ The results and figures go in this change's `diagnostics.md`. The instructor the
 
 - **[Student drawings still don't look like training data** (crisp, one flat shade, no noise), so predictions may still be wrong.] → The README treats a wrong prediction as something to investigate, not a bug. Both helpers produce images inside the training distribution for size, framing, polarity, and antialiasing, which are the largest gaps.
 - **[The `crop_and_center` threshold picks up stray marks** (a signature, a stray line), which inflates the circle.] → The error for a blank image and the README tell students to draw one figure. The threshold is a module constant that can be tuned without a spec change.
+- **[The two preparation orders differ slightly]**: grayscale-then-scale and scale-then-grayscale can differ by rounding, and a student's weighted grayscale (e.g. by luminance) can shift `crop_and_center()`'s threshold decisions at the figure's edges. → Both orders give valid, model-sized images; the README says the order is free but grayscale must come before `predict()`. Tests compare the orders with a tolerance.
 - **[The exact grayscale check rejects pictures loaded from JPEG photos]**, whose colour compression leaves small differences between channels. → The error message says what to do (run the grayscale conversion). A tolerance can be added later (Open Questions).
 - **[mediaComp changes its `Picture` constructor or `getImage()`** (it is at version 0.4.x).] → Only those two touchpoints are used. The fake class in the tests documents the assumed interface. An optional test against the real PyPI release runs wherever mediaComp is installed, and a manual check on Windows is a task.
 - **[picoface's 0.65 framing constant drifts from the Forge's default]** → A Forge test asserts they are equal (Decision 4).
