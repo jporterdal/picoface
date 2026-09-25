@@ -10,10 +10,15 @@ export's training split with picoface's default settings, then reports:
   for each class;
 - reconstruction agreement: the CNN judging the VAE's reconstructions of real
   test images, which separates "the decoder can't draw this class" from "the
-  capstone samples the wrong part of the latent space".
+  capstone samples the wrong part of the latent space";
+- edge darkening of `activation_maximize()` images for each class and model:
+  the mean of the outermost 2-pixel ring minus the mean of the 2-pixel ring
+  inside it. Its blur pads with zeros (black), which on light-background data
+  could darken the edges; strongly negative values mean it does.
 
-`--figures DIR` also writes `generated.png` and `reconstructed.png` there (one
-row per class, real images first), for looking at what the numbers are about.
+`--figures DIR` also writes `generated.png`, `reconstructed.png`, and
+`activation_maximize.png` there (one row per class, real images first where
+there are any), for looking at what the numbers are about.
 `--epochs` overrides `train()`'s default, to separate the effect of more data
 from that of more optimizer steps. A measurement for Phase 6, not a test and
 not tuning: nothing here passes or fails.
@@ -31,9 +36,12 @@ from picoface._internals.model_api import _preprocess_images, _to_uint8_images
 from picoface.classifier import build_classifier, evaluate, predict, train
 from picoface.datasets import Dataset, load_dataset
 from picoface.generator import build_vae
-from picoface.linkage import classify_generated
+from picoface.linkage import activation_maximize, classify_generated
 
 _FIGURE_SCALE = 6
+# activation_maximize() images per class and model, each from its own random start.
+_ASCENT_STARTS = 4
+_EDGE_RING = 2
 
 
 def confusion_matrix(model, data: Dataset) -> np.ndarray:
@@ -67,6 +75,32 @@ def reconstruction_report(cnn, vae, data: Dataset, n: int) -> dict:
     return report
 
 
+def edge_darkening(images: np.ndarray) -> float:
+    """Mean of the images' outermost `_EDGE_RING`-pixel ring minus that of the ring inside it."""
+    height, width = images.shape[1:3]
+    rows, cols = np.mgrid[0:height, 0:width]
+    depth = np.minimum.reduce([rows, cols, height - 1 - rows, width - 1 - cols])
+    outer = images[:, depth < _EDGE_RING].astype(np.float64)
+    inner = images[:, (depth >= _EDGE_RING) & (depth < 2 * _EDGE_RING)].astype(np.float64)
+    return float(outer.mean() - inner.mean())
+
+
+def activation_maximize_report(models: dict, class_names: list[str]) -> dict:
+    """Per class and model, `_ASCENT_STARTS` activation_maximize() images and their edge darkening."""
+    report = {}
+    for name in class_names:
+        report[name] = {}
+        for model_name, r in models.items():
+            images = np.stack(
+                [activation_maximize(r["model"], name) for _ in range(_ASCENT_STARTS)]
+            )
+            report[name][model_name] = {
+                "images": images,
+                "edge_darkening": edge_darkening(images),
+            }
+    return report
+
+
 def smoke(out_dir: str | Path, seed: int = 0, n: int = 20, epochs: int | None = None) -> dict:
     """Train both models on `out_dir`'s export and measure them."""
     out_dir = Path(out_dir)
@@ -90,6 +124,9 @@ def smoke(out_dir: str | Path, seed: int = 0, n: int = 20, epochs: int | None = 
     cnn, vae = results["models"]["cnn"]["model"], results["models"]["vae"]["model"]
     results["classify_generated"] = classify_generated(cnn, vae, train_data, n=n)
     results["reconstruction"] = reconstruction_report(cnn, vae, test_data, n=n)
+    results["activation_maximize"] = activation_maximize_report(
+        results["models"], train_data.class_names
+    )
     return results
 
 
@@ -122,6 +159,20 @@ def format_results(results: dict) -> str:
         )
     overall_recon = np.mean([r["agreement"] for r in recon.values()])
     lines.append(f"| overall | {generated.overall:.2f} | {overall_recon:.2f} |")
+
+    ascent = results["activation_maximize"]
+    model_names = list(results["models"])
+    lines += [
+        "",
+        f"activation_maximize() edge darkening ({_ASCENT_STARTS} random starts; outermost "
+        f"{_EDGE_RING}-pixel ring minus the next ring in; negative means darker edges):",
+        "",
+        "| Class | " + " | ".join(model_names) + " |",
+        "|---" * (len(model_names) + 1) + "|",
+    ]
+    for name in names:
+        values = " | ".join(f"{ascent[name][m]['edge_darkening']:+.1f}" for m in model_names)
+        lines.append(f"| {name} | {values} |")
     return "\n".join(lines)
 
 
@@ -143,6 +194,8 @@ def _grid(rows: list[list[np.ndarray]]) -> Image.Image:
 def write_figures(results: dict, figures_dir: str | Path) -> list[Path]:
     """`generated.png`: per class, 4 real training images, a gap, 12 generated ones.
     `reconstructed.png`: per class, 6 real test images, a gap, their reconstructions.
+    `activation_maximize.png`: per class, the CNN's activation_maximize() images,
+    a gap, the VAE's.
     """
     figures_dir = Path(figures_dir)
     figures_dir.mkdir(parents=True, exist_ok=True)
@@ -157,9 +210,21 @@ def write_figures(results: dict, figures_dir: str | Path) -> list[Path]:
             list(recon["real"][:6]) + [None] + list(recon["reconstructed"][:6])
         )
 
-    paths = [figures_dir / "generated.png", figures_dir / "reconstructed.png"]
+    ascent_rows = []
+    for name in results["class_names"]:
+        row = []
+        for model_name in results["models"]:
+            row += list(results["activation_maximize"][name][model_name]["images"]) + [None]
+        ascent_rows.append(row[:-1])
+
+    paths = [
+        figures_dir / "generated.png",
+        figures_dir / "reconstructed.png",
+        figures_dir / "activation_maximize.png",
+    ]
     _grid(generated_rows).save(paths[0])
     _grid(reconstructed_rows).save(paths[1])
+    _grid(ascent_rows).save(paths[2])
     return paths
 
 

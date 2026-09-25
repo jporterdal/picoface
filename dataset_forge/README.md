@@ -127,7 +127,9 @@ The main ones:
 - `radius_fraction`, `radius_jitter`: figure size, and how much it varies.
 - `stroke_fraction`: outline and face-feature width, relative to the figure.
 - `background_range`, `min_contrast`: random shades. The foreground is
-  always lighter than the background, by at least `min_contrast`.
+  always darker than the background, by at least `min_contrast`, so figures
+  look like dark drawings on light paper, as mediaComp draws by default.
+  Every class shares this polarity, `negative_smiley` included.
 - `noise_sigma`: pixel noise.
 
 ## Tests

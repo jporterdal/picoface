@@ -50,7 +50,8 @@ class GeneratedImagesReport:
     for that class that the classifier also called that class; `overall` is
     the same fraction across every generated image. `images[i]` was generated
     for class `intended[i]` and classified as `predicted[i]`; `images` is a
-    uint8 image array shaped (count, height, width, channels).
+    uint8 image array shaped (count, height, width, channels); to look at them
+    in mediaComp, use `picoface.pictures.save_images()`.
     """
 
     per_class: dict[str, float]
@@ -121,7 +122,8 @@ def activation_maximize(model, target_class: str) -> np.ndarray:
     direction raises the class's score, so the result shows what the model
     has learned to look for in that class. Works with any model that
     classifies. Returns one uint8 image array shaped (height, width,
-    channels), the model's image shape.
+    channels), the model's image shape. To look at it in mediaComp, use
+    `picoface.pictures.save_images()`.
     """
     _require_capability(model, "classify", "activation_maximize")
     if target_class not in model.class_names:

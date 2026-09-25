@@ -6,7 +6,7 @@ pytest.importorskip("PIL")
 import numpy as np  # noqa: E402
 
 from dataset_forge.export import export  # noqa: E402
-from dataset_forge.smoke import format_results, smoke, write_figures  # noqa: E402
+from dataset_forge.smoke import edge_darkening, format_results, smoke, write_figures  # noqa: E402
 from dataset_forge.tests._configs import tiny_config  # noqa: E402
 
 
@@ -27,9 +27,30 @@ def test_smoke_check_measures_both_models_on_an_export(tmp_path):
         assert r["reconstructed"].shape == r["real"].shape == (2, 28, 28, 1)
         assert 0.0 <= r["agreement"] <= 1.0
 
+    assert list(results["activation_maximize"]) == ["circle", "ring", "square"]
+    for per_model in results["activation_maximize"].values():
+        assert set(per_model) == {"cnn", "vae"}
+        for r in per_model.values():
+            assert r["images"].shape == (4, 28, 28, 1)
+            assert -255 <= r["edge_darkening"] <= 255
+
     table = format_results(results)
     assert "| cnn |" in table and "| vae |" in table and "| overall |" in table
+    assert "edge darkening" in table
+    for name in ("circle", "ring", "square"):
+        assert sum(line.startswith(f"| {name} |") for line in table.splitlines()) == 4
 
     paths = write_figures(results, tmp_path / "figures")
-    assert [p.name for p in paths] == ["generated.png", "reconstructed.png"]
+    assert [p.name for p in paths] == [
+        "generated.png",
+        "reconstructed.png",
+        "activation_maximize.png",
+    ]
     assert all(p.stat().st_size > 0 for p in paths)
+
+
+def test_edge_darkening_compares_the_outer_ring_with_the_next_one_in():
+    images = np.full((2, 12, 12, 1), 200, np.uint8)
+    images[:, :2, :] = images[:, -2:, :] = images[:, :, :2] = images[:, :, -2:] = 150
+
+    assert edge_darkening(images) == pytest.approx(-50)

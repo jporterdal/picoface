@@ -14,6 +14,7 @@ dependencies = [
     "torch>=2.0",  # install the CPU wheel first — see README's Install section
     "numpy>=1.24",
     "matplotlib>=3.7",
+    "pillow>=10",
 ]
 keywords = ["deep-learning", "pytorch", "education", "classifier", "vae", "generative-model"]
 classifiers = [

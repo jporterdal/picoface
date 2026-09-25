@@ -75,12 +75,13 @@ def mean_brightness(images: np.ndarray) -> np.ndarray:
 def ink_fraction(images: np.ndarray) -> np.ndarray:
     """Estimated fraction of each image's pixels that belong to the figure.
 
-    Pixels above the midpoint between the image's 5th and 95th percentile
-    values — roughly its background and foreground shades — count as ink.
+    Pixels below the midpoint between the image's 5th and 95th percentile
+    values — roughly its foreground and background shades — count as ink,
+    since figures are darker than their background.
     """
     flat = images.reshape(len(images), -1).astype(np.float64)
     low, high = np.percentile(flat, [5, 95], axis=1)
-    return (flat > ((low + high) / 2)[:, None]).mean(axis=1)
+    return (flat < ((low + high) / 2)[:, None]).mean(axis=1)
 
 
 def nearest_class_mean_accuracy(

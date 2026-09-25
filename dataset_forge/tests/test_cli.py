@@ -52,7 +52,7 @@ def test_validate_command_exits_non_zero_on_a_failed_check(tmp_path):
         class_names=("circle", "ring"),
         train_per_class=40,
         test_per_class=20,
-        background_range=(40, 40),
+        background_range=(250, 250),
         min_contrast=210,
         noise_sigma=0.0,
     )

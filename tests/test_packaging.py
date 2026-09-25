@@ -1,5 +1,6 @@
 """The student-facing package stays independent of Dataset Forge."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,8 +24,22 @@ def test_importing_every_picoface_module_imports_no_dataset_forge_code():
     assert result.stdout.strip() == "[]"
 
 
-def test_picoface_does_not_declare_the_forges_dependencies():
-    # A plain text check: tomllib needs Python 3.11, and picoface supports 3.10.
-    pyproject = (REPO_ROOT / "pyproject.toml").read_text().lower()
+def _normalized(requirement: str) -> str:
+    return re.sub(r"\s+", "", requirement).lower()
 
-    assert "pillow" not in pyproject
+
+def test_picoface_does_not_carry_the_forges_exact_pins():
+    # A plain text parse: tomllib needs Python 3.11, and picoface supports 3.10.
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+    dependencies = re.search(r"^dependencies = \[(.*?)^\]", pyproject, re.M | re.S).group(1)
+    declared = {_normalized(entry) for entry in re.findall(r'"([^"]+)"', dependencies)}
+    requirements = (REPO_ROOT / "dataset_forge" / "requirements.txt").read_text()
+    pins = {
+        _normalized(line)
+        for line in requirements.splitlines()
+        if "==" in line and not line.lstrip().startswith("#")
+    }
+
+    assert declared, "no dependencies found in pyproject.toml"
+    assert pins, "no exact pins found in dataset_forge/requirements.txt"
+    assert not declared & pins

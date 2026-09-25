@@ -9,7 +9,7 @@ from dataclasses import replace  # noqa: E402
 import numpy as np  # noqa: E402
 
 from dataset_forge.render import render_coverage, render_image, sample_params, shade  # noqa: E402
-from dataset_forge.shapes import SHAPES, Placement  # noqa: E402
+from dataset_forge.shapes import _EYE_OFFSETS, SHAPES, Placement  # noqa: E402
 from dataset_forge.tests._configs import default_config  # noqa: E402
 
 CONFIG = default_config()
@@ -44,12 +44,12 @@ def test_the_largest_figure_pushed_into_a_corner_is_not_clipped(class_name, corn
         assert not border.any()
 
 
-def test_foreground_is_always_lighter_by_at_least_the_minimum_contrast():
+def test_foreground_is_always_darker_by_at_least_the_minimum_contrast():
     for params in _draws("circle", n=2000):
         low, high = CONFIG.background_range
         assert low <= params.background <= high
-        assert params.foreground - params.background >= CONFIG.min_contrast
-        assert params.foreground <= 255
+        assert params.background - params.foreground >= CONFIG.min_contrast
+        assert params.foreground >= 0
 
 
 def test_variation_covers_rotation_size_position_and_shades():
@@ -82,6 +82,26 @@ def test_full_coverage_without_noise_is_exactly_the_foreground_shade():
     image = shade(np.ones((28, 28)), params, noise_sigma=0.0, rng=rng)
 
     assert np.all(image == round(params.foreground))
+
+
+def test_the_negative_smiley_shares_the_polarity():
+    # A large canvas, so the eyes cover whole pixels.
+    config = default_config(height=112, width=112)
+    params = sample_params(np.random.default_rng(0), config, "negative_smiley")
+    rng = np.random.default_rng(0)
+
+    image = shade(render_coverage(params, config), params, 0.0, rng)[..., 0]
+
+    def at(x, y):
+        return image[int(y), int(x)]
+
+    p = params.placement
+    background, foreground = round(params.background), round(params.foreground)
+    assert foreground < background
+    assert at(p.cx, p.cy) == foreground
+    eye_u, eye_v = _EYE_OFFSETS[0]
+    assert at(*p.point(eye_u * p.radius, eye_v * p.radius)) == background
+    assert image[0, 0] == image[0, -1] == image[-1, 0] == image[-1, -1] == background
 
 
 @pytest.mark.parametrize(

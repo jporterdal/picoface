@@ -14,9 +14,10 @@ from picoface.datasets import Dataset
 # pixels every figure covers. Every shapes image has exactly the same number
 # of foreground pixels, so its pixel-value distribution — and with it mean
 # brightness, contrast, and any other order-free statistic — is the same for
-# every class; only the pixels' arrangement tells the classes apart.
-_SHAPE_BACKGROUND = 64
-_SHAPE_FOREGROUND = 192
+# every class; only the pixels' arrangement tells the classes apart. Figures
+# are darker than their background, like the real dataset's.
+_SHAPE_BACKGROUND = 192
+_SHAPE_FOREGROUND = 64
 _SHAPE_AREA_FRACTION = 0.2
 
 _NOISE_AMPLITUDE = 20

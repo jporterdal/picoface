@@ -20,8 +20,8 @@
   "stroke_jitter": 0.15,
   "min_stroke": 1.0,
   "background_range": [
-    0,
-    159
+    96,
+    255
   ],
   "min_contrast": 96,
   "noise_sigma": 6.0,

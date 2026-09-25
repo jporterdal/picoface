@@ -17,3 +17,9 @@ class GeneratorError(CapabilityError):
     """Raised when a function requiring a `build_vae()` model is given a
     model without that capability (e.g. a `build_autoencoder()` model).
     """
+
+
+class PictureError(ValueError):
+    """Raised when a picture or image can't be prepared as asked, e.g. one that
+    isn't grayscale where grayscale is required, or has no figure to crop to.
+    """

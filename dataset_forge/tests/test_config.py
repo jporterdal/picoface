@@ -11,7 +11,7 @@ from dataset_forge.tests._configs import tiny_config  # noqa: E402
 
 
 def test_config_round_trips_through_json(tmp_path):
-    config = tiny_config(background_range=(10, 100), noise_sigma=3.5)
+    config = tiny_config(background_range=(100, 200), noise_sigma=3.5)
     path = tmp_path / "config.json"
 
     config.save(path)
@@ -44,7 +44,7 @@ def test_default_config_is_the_seven_class_28px_grayscale_course_set():
         (dict(height=0), "height"),
         (dict(channels=3), "grayscale"),
         (dict(background_range=(100, 50)), "background_range"),
-        (dict(background_range=(0, 200), min_contrast=96), "min_contrast"),
+        (dict(background_range=(50, 200), min_contrast=96), "background_range.*min_contrast"),
         (dict(radius_jitter=1.0), "jitter"),
         (dict(radius_fraction=1.0), "does not fit"),
     ],
@@ -60,3 +60,11 @@ def test_unknown_config_keys_are_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="colour"):
         ForgeConfig.load(path)
+
+
+def test_picofaces_framing_constant_matches_the_default_radius_fraction():
+    # picoface can't import the Forge, so `crop_and_center()` keeps its own copy.
+    from picoface._internals.picture_internals import RADIUS_FRACTION
+
+    assert RADIUS_FRACTION == tiny_config().radius_fraction
+    assert RADIUS_FRACTION == ForgeConfig.load(DEFAULT_CONFIG).radius_fraction

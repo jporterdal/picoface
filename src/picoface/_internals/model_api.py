@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from picoface._internals.errors import CapabilityError, GeneratorError
 from picoface._internals.image_checks import check_image_array
+from picoface._internals.picture_internals import is_picture, picture_to_gray_array
 from picoface.datasets import Dataset
 
 
@@ -297,19 +298,27 @@ def evaluate(model, data: Dataset) -> float:
     return float((predicted == labels).mean())
 
 
-def predict(model, image: np.ndarray) -> str:
-    """Return the predicted class name for a single image array.
+def predict(model, image) -> str:
+    """Return the predicted class name for a single image array or picture.
 
     `image` is one uint8 image array shaped (height, width, channels), the
     same size as the images the model was built for, e.g. `data.images[0]`.
-    Raises the model's `ShapeError` for an image array of the wrong shape,
-    dtype, or size, or for a whole batch of images; raises `GeneratorError`
-    (a `CapabilityError`) for a model that cannot classify, such as one built
-    by `build_autoencoder()`.
+    It can also be a grayscale picture (e.g. from mediaComp) of that size: it
+    is converted exactly as `picoface.pictures.picture_to_array()` converts
+    it, but never cropped or resized, so prepare it with `crop_and_center()`
+    and `scale_down()` first.
+
+    Raises the model's `ShapeError` for an image array or picture of the wrong
+    shape, dtype, or size, or for a whole batch of images; `PictureError` for
+    a picture that is not grayscale; and `GeneratorError` (a
+    `CapabilityError`) for a model that cannot classify, such as one built by
+    `build_autoencoder()`.
     """
     _require_capability(model, "classify", "predict", error_cls=GeneratorError)
-    # A picture (mediacomp-bridge) is converted to an image array here, so the
-    # checks below apply to it too.
+    # A picture is converted to an image array first, so the checks below
+    # apply to it too.
+    if is_picture(image):
+        image = picture_to_gray_array(image)
     _check_single_image(image, model)
     model.eval()
 
@@ -335,7 +344,8 @@ def _check_single_image(image, model: _Model) -> None:
 def generate(model, n: int) -> np.ndarray:
     """Sample `n` new images from a trained `build_vae()` model's latent space.
 
-    Returns a uint8 image array shaped (n, height, width, channels).
+    Returns a uint8 image array shaped (n, height, width, channels). To look
+    at the images in mediaComp, use `picoface.pictures.save_images()`.
 
     Raises `GeneratorError` for any model that cannot generate (e.g. one built
     by `build_autoencoder()`, which has no probabilistic prior to sample from).

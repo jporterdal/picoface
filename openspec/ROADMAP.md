@@ -20,7 +20,7 @@ A function existing in the public API does not imply it appears in student-facin
 
 - **Arm 1: classifier (CNN)** — recognize basic shapes/smiley face in tiny images. `build_classifier()`, `train()`, `evaluate()`, `predict()`, plus viz helpers. Since Phase 3c it is **no longer the student's main path**: it is the capstone's *independent judge*, a model trained separately from the generator so that scoring generated images with it means something.
 - **Arm 2: the student's model (supervised VAE)** — since Phase 3c, one model that both classifies and generates from a single `train()` call on labeled data. `build_vae()`, `train()`, `evaluate()`, `predict()`, `generate()`. Its classifier reads the same probabilistic latent space that `generate()` samples from. `build_autoencoder()` remains as an optional, reconstruction-only model; it is not a step on the way to the VAE, and it does not classify.
-- **Arm 3 (instructor-only): Dataset Forge** — unrestricted, modern-hardware, offline tool that procedurally renders the real training/testing image sets and ships them to students in a fixed data-contract format. Runs once before term starts.
+- **Arm 3 (instructor-only): Dataset Forge** — unrestricted, modern-hardware, offline tool that procedurally renders the real training/testing image sets and ships them to students in a fixed data-contract format. Runs once before term starts. Since `mediacomp-bridge` it renders dark figures on light backgrounds, the way mediaComp draws by default (Phase 5 rendered light on dark).
 
 A capstone linkage module ties Arms 1 and 2 together: `classify_generated()` (generate images for each class from the VAE and check whether the independently trained CNN agrees) and `activation_maximize()` (visualize what a classifier "imagines" for a class).
 
@@ -36,6 +36,7 @@ Training must complete in seconds to minutes on an older CPU-only laptop — the
 - **`model-interface`** — the model-agnostic public verbs (`train`, `evaluate`, `predict`, `generate`) and the abstract model contract behind them, so a call's shape never depends on which kind of model was built. Added in Phase 3b.
 - **`capstone-linkage`** — the functions that tie the classifier and generator arms together into a closing exercise (classifying class-targeted generated images with the independent CNN; activation-maximization visualization from any classifying model). Added in Phase 4.
 - **`dataset-forge`** — the instructor-only, unrestricted offline tool that generates the real training/testing dataset and exports it in the `data-contract` format.
+- **`mediacomp-bridge`** — `picoface.pictures`, which connects picoface to mediaComp, the Media Computation library students already know: preparing a drawn picture for `predict()` (`crop_and_center()`, `scale_down()`, `picture_to_array()`), and saving picoface's image arrays as PNGs that mediaComp's `makePicture()` opens (`save_images()`). `predict()` also accepts a grayscale picture directly. Added by `mediacomp-bridge`, which also modifies `model-interface` and `dataset-forge`.
 - **`packaging`** — the installable-package structure and naming (`picoface` repo, import name, and PyPI distribution name aligned) that supports pip/zip/Colab-git-clone distribution without committing to one channel. Its requirements (naming consistency, `pyproject.toml` + src layout, Dataset Forge excluded from the installable package) are purely structural and fully satisfied by Phase 0 — Phase 7's remaining work is *choosing and documenting* which channel to actually publish through, not adding new structural requirements.
 
 Phases 0–3 each introduced new capabilities. Phase 3b adds `model-interface` and is the first change to *modify* existing capabilities (`shape-classifier`, `shape-generator`). Phase 3c modifies `shape-generator`, `shape-classifier`, `model-interface`, and `data-contract`. Phase 4 adds `capstone-linkage` and modifies `model-interface`.
@@ -51,7 +52,7 @@ Phases 0–3 each introduced new capabilities. Phase 3b adds `model-interface` a
 
 ## Dependencies
 
-PyTorch (CPU), numpy, matplotlib. Packaging via `pyproject.toml` with a src layout. Dataset Forge maintains its own separate dependency manifest, decoupled from the installable package.
+PyTorch (CPU), numpy, matplotlib, Pillow (declared directly since `mediacomp-bridge`, as a minimum version; it already came with matplotlib). mediaComp is not a dependency: students install it separately. Packaging via `pyproject.toml` with a src layout. Dataset Forge maintains its own separate dependency manifest, decoupled from the installable package.
 
 ## Key Design Decisions
 
@@ -66,6 +67,7 @@ PyTorch (CPU), numpy, matplotlib. Packaging via `pyproject.toml` with a src layo
 - **Disposable synthetic stub dataset** — small, arbitrary-dimension, 2–3 fake classes, shipped inside the package purely to exercise `load_dataset()` and all three arms before Dataset Forge exists. This is the mechanism (not just the intent) behind deferring taxonomy/resolution/noise decisions to Phase 5.
 - **Linkage operates on in-memory model objects, not files.** No save/load or serialization format for MVP; capstone exercise runs within a single notebook session.
 - **Packaging:** standard `pyproject.toml` + src layout; Dataset Forge lives in its own top-level directory with its own dependency manifest, entirely decoupled from the installable `picoface` package. Supports pip-from-PyPI, pip-from-zip, and Colab-git-clone without committing to one channel now.
+- **mediaComp pictures by duck typing, with no mediaComp dependency (`mediacomp-bridge`).** A picture is anything whose `getImage()` returns a Pillow image; a helper builds its result with `type(picture)(pil_image)`. picoface never imports mediaComp, whose import pulls in tkinter, pygame, sounddevice, and wxPython. Grayscale conversion stays the student's own pixel loop: `picture_to_array()` and `predict()` reject a colour picture with guidance rather than converting it, while `crop_and_center()` and `scale_down()` accept colour too, so the conversion can come before or after them. See `openspec/changes/mediacomp-bridge/design.md`.
 - **Phase sequencing preserves deferral over dependency-minimality.** Dataset Forge (Phase 5) has no actual code dependency on Phases 2–4 — it's sequenced after them anyway so shape taxonomy, resolution, color depth, and noise policy stay undecided as long as possible. This is a project requirement, not a technical constraint, and should not be "optimized away."
 
 ## Non-Goals (project-wide)
@@ -144,6 +146,8 @@ Makes the VAE the student's model: labeled data in, and one model out that class
 ### Phase 5 — Dataset Forge (Arm 3) + real content decisions
 THIS is where shape taxonomy, resolution/color depth, and noise/augmentation policy actually get decided and built, unrestricted hardware/libs, exports the real dataset in the Phase 1 contract format.
 
+Phase 5 rendered light figures on dark backgrounds. `mediacomp-bridge` flipped the polarity for every class, `negative_smiley` included: the background is drawn from 96–255 and the figure is at least `min_contrast` darker, so students' mediaComp drawings (black on white by default) match the training data. An exploration spike found no loss from the flip (`mediacomp-bridge/design.md`, Decision 8).
+
 ### Phase 6 — End-to-end integration & tuning
 Swapped the real dataset in for the stub across the model-quality tests (the stub stays for fast plumbing tests), tuned the placeholder model constants against real data, and verified the CPU time budget and `train()`'s defaults end-to-end. See `openspec/changes/picoface-phase6/` (proposal, design, specs, tasks, diagnostics — archive location updated once archived).
 
@@ -158,6 +162,10 @@ Swapped the real dataset in for the stub across the model-quality tests (the stu
 
 ### Phase 7 — Student docs & MVP packaging
 An `/opsx:explore` session scoped this phase's five original pieces down to three done here: choosing/preparing a PyPI distribution channel, writing the student-facing docs that now carry the full teaching load, and documenting (non-gating) expected result ranges. Two pieces were explicitly scoped out: real-dataset distribution to students (the user's own responsibility, outside this project) and template notebooks (downgraded to a post-MVP nice-to-have — see the Open Questions this leaves deferred, below). See `openspec/changes/picoface-phase7/` (proposal, design, tasks).
+
+## Potential Future Changes
+
+- **Replicate padding in the convolution layers.** After the polarity flip, the layers' zero padding (black) no longer matches the white background. `mediacomp-bridge`'s spike measured no effect, including with the first layer padded with 255, so nothing changed. If it is ever needed, replicate padding is preferred: it suits either polarity, because the Forge keeps the outer rows and columns free of ink (`mediacomp-bridge/design.md`, Decision 9). The same change also checked whether the zero padding in `activation_maximize()`'s blur darkens the edges on light backgrounds. It darkens them under both polarities, and less after the flip, so the blur was left unchanged (`mediacomp-bridge/diagnostics.md`).
 
 ## Risks / Trade-offs
 

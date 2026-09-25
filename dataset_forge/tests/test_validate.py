@@ -3,9 +3,12 @@ import pytest
 # Needs the Forge's own requirements; skipped cleanly without them.
 pytest.importorskip("PIL")
 
+from dataclasses import replace  # noqa: E402
+
 import numpy as np  # noqa: E402
 
 from dataset_forge.export import export, read_manifest  # noqa: E402
+from dataset_forge.render import render_coverage, sample_params, shade  # noqa: E402
 from dataset_forge.tests._configs import default_config, tiny_config  # noqa: E402
 from dataset_forge.validate import ink_fraction, validate_and_record, validate_export  # noqa: E402
 
@@ -48,12 +51,12 @@ def test_results_are_recorded_in_the_manifest(tmp_path):
 
 
 def test_a_brightness_separable_export_fails_the_brightness_check(tmp_path):
-    # Fixed shades and no noise: a filled circle is simply brighter than a ring.
+    # Fixed shades and no noise: a filled circle is simply darker than a ring.
     config = tiny_config(
         class_names=("circle", "ring"),
         train_per_class=40,
         test_per_class=20,
-        background_range=(40, 40),
+        background_range=(250, 250),
         min_contrast=210,
         noise_sigma=0.0,
     )
@@ -96,7 +99,22 @@ def test_a_bundle_with_the_wrong_image_shape_fails_the_load_check(tmp_path):
 
 
 def test_ink_fraction_tracks_how_much_of_the_image_the_figure_covers():
-    image = np.full((1, 10, 10, 1), 30, dtype=np.uint8)
-    image[0, :3] = 220  # 30% of pixels
+    image = np.full((1, 10, 10, 1), 220, dtype=np.uint8)
+    image[0, :3] = 30  # 30% of pixels
 
     assert ink_fraction(image)[0] == pytest.approx(0.3)
+
+
+def test_ink_fraction_counts_the_dark_figure_of_a_rendered_image():
+    config = default_config()
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        params = sample_params(rng, config, "circle")
+        circle = shade(render_coverage(params, config), params, config.noise_sigma, rng)
+        ring_params = replace(params, class_name="ring")
+        ring = shade(render_coverage(ring_params, config), ring_params, config.noise_sigma, rng)
+
+        circle_ink, ring_ink = ink_fraction(np.stack([circle, ring]))
+
+        assert 0.1 < circle_ink < 0.45
+        assert ring_ink < circle_ink

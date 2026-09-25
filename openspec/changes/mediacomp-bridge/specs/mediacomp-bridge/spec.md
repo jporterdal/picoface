@@ -74,7 +74,7 @@ The system SHALL provide `scale_down(image, size=28)`, which shrinks a square co
 - **THEN** the system SHALL raise an error saying the image must be square, and naming `crop_and_center()` as the way to make it so
 
 ### Requirement: Saving picoface images for mediaComp
-The system SHALL provide `save_images(images, folder, scale=8)`. It writes each image as an RGB PNG file in `folder`, creating the folder if needed, and returns the written file paths in image order. It SHALL accept one image or a batch of images in picoface's image format, which covers the output of `generate()`, `activation_maximize()`, and a `classify_generated()` report's images. Each image SHALL be enlarged by the whole-number factor `scale` with no blending between pixels, so every original pixel becomes a solid `scale`×`scale` block.
+The system SHALL provide `save_images(images, folder, scale=8)`. It writes each image as an RGB PNG file in `folder`, creating the folder if needed, and returns the written files' absolute paths in image order. It SHALL accept one image or a batch of images in picoface's image format, which covers the output of `generate()`, `activation_maximize()`, and a `classify_generated()` report's images. Each image SHALL be enlarged by the whole-number factor `scale` with no blending between pixels, so every original pixel becomes a solid `scale`×`scale` block.
 
 #### Scenario: Generated images open in mediaComp
 - **WHEN** a student saves the output of `generate(model, 8)` and opens the first returned path with mediaComp's `makePicture()`

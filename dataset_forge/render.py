@@ -46,7 +46,7 @@ def sample_params(rng: np.random.Generator, config: ForgeConfig, class_name: str
 
     low, high = config.background_range
     background = rng.uniform(low, high)
-    foreground = rng.uniform(background + config.min_contrast, 255)
+    foreground = rng.uniform(0, background - config.min_contrast)
 
     return FigureParams(
         class_name=class_name,

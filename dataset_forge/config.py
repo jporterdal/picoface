@@ -15,7 +15,7 @@ class ForgeConfig:
 
     Sizes are relative to a figure's circumscribed radius (the smallest circle
     around it), which is what "the same size" means across classes. Shades are
-    gray levels 0-255; the foreground is always lighter than the background.
+    gray levels 0-255; the foreground is always darker than the background.
     """
 
     name: str
@@ -36,8 +36,8 @@ class ForgeConfig:
     # Strokes never get thinner than this many output pixels.
     min_stroke: float = 1.0
     # Background shade range, inclusive.
-    background_range: tuple[int, int] = (0, 159)
-    # The foreground is at least this much lighter than the background.
+    background_range: tuple[int, int] = (96, 255)
+    # The foreground is at least this much darker than the background.
     min_contrast: int = 96
     # Standard deviation of per-pixel Gaussian noise, in gray levels.
     noise_sigma: float = 6.0
@@ -62,10 +62,10 @@ class ForgeConfig:
                 "background_range must satisfy 0 <= low <= high <= 255, "
                 f"got {self.background_range}."
             )
-        if high + self.min_contrast > 255:
+        if low - self.min_contrast < 0:
             raise ValueError(
-                f"a background of {high} leaves no foreground shade at least {self.min_contrast} "
-                "lighter; lower background_range's upper end or min_contrast."
+                f"a background of {low} leaves no foreground shade at least {self.min_contrast} "
+                "darker; raise background_range's lower end or lower min_contrast."
             )
         if not 0 <= self.radius_jitter < 1 or not 0 <= self.stroke_jitter < 1:
             raise ValueError("radius_jitter and stroke_jitter must be in [0, 1).")

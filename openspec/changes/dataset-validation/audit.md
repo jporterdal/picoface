@@ -1,6 +1,6 @@
 # Picture-vs-array consistency audit
 
-**Case (task 4.1):** `mediacomp-bridge` is **not yet implemented**. `src/picoface/pictures.py` doesn't exist, and `predict()` takes only image arrays. This audit therefore covers datasets and image arrays only. The wording for pictures is handed to `mediacomp-bridge` as its task 3.11.
+**Case (task 4.1):** when this audit was written, `mediacomp-bridge` was **not yet implemented**: `src/picoface/pictures.py` didn't exist, and `predict()` took only image arrays. The audit therefore covered datasets and image arrays only, and handed the wording for pictures to `mediacomp-bridge` as its task 3.11. The `pictures` rows and the picture wording for `predict()` at the end of the table were added by `mediacomp-bridge` 3.11.
 
 **Vocabulary** (design.md Decision 10):
 - *picture*: a mediaComp-style `Picture`;
@@ -25,3 +25,8 @@
 | `linkage` | `ShapeError` | "models or data used together disagree" | None | None |
 | `viz` | `plot_training_history(history)` | Takes a `TrainingHistory` | None: no images | None |
 | README | Quickstart, "Getting a dataset" | `data.images[0]`, `generate(...)` "new images"; format "uint8 N×H×W×C" | Channel rule and `classes.json` key rule not stated; no mention of errors or the new properties | Updated in task 4.4 |
+| `classifier`, `generator` | `predict(model, image)` (pictures) | Took only image arrays | Pictures needed wording | Docstring: `image` is an image array or a grayscale picture of the model's size, converted as `picture_to_array()` converts it and never cropped or resized; `PictureError` for a picture that isn't grayscale (`mediacomp-bridge` 3.7, 3.11) |
+| `pictures` | `picture_to_array(picture)` | New | None | Docstring: takes a *picture*, returns a uint8 *image array* shaped (height, width, 1); `PictureError` if not grayscale, `TypeError` for anything but a picture |
+| `pictures` | `crop_and_center(image)`, `scale_down(image, size)` | New | Deliberately more lenient than `predict()`: they accept an H×W image array with no channel axis, and colour as well as grayscale, so a student's grayscale step can come before or after them | Docstrings: `image` is a *picture* or an *image array*, in colour or grayscale; a picture gives back a new picture of the same type, an image array gives back an image array with the same channel count |
+| `pictures` | `save_images(images, folder, scale)` | New | None | Docstring: takes one *image array* or several, e.g. from `generate()`, `activation_maximize()`, or a report's `images`; returns file paths for mediaComp's `makePicture()` |
+| `generator`, `linkage` | `generate()`, `activation_maximize()`, `GeneratedImagesReport.images` | Returned image arrays with no way to view them in mediaComp | None | Docstrings point to `pictures.save_images()` for viewing in mediaComp |
