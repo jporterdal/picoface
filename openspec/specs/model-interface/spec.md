@@ -41,6 +41,8 @@ The functions `train`, `evaluate`, and `predict` SHALL be importable from `picof
 ### Requirement: Model-agnostic evaluate() and predict()
 `evaluate(model, data)` and `predict(model, image)` SHALL work on any model that has a classification capability — a CNN classifier or a model built by `build_vae()` — with unchanged signatures, returning accuracy (0 to 1) and a class name respectively. Models built by `build_autoencoder()` do not have this capability. The same shape and class-count consistency checks SHALL apply regardless of model kind.
 
+`predict()` SHALL accept, as `image`, either an image array or a picture as defined by the `mediacomp-bridge` capability. A picture SHALL be converted exactly as `picture_to_array()` converts it, and the same grayscale requirement SHALL apply. `predict()` SHALL NOT crop or resize a picture: one whose size differs from the model's SHALL be rejected with the usual shape error.
+
 #### Scenario: Evaluating a joint model with the classifier's function
 - **WHEN** a student trains a model from `build_vae(data)` and then calls `evaluate(model, data)`
 - **THEN** the function SHALL return a classification accuracy between 0 and 1
@@ -60,6 +62,18 @@ The functions `train`, `evaluate`, and `predict` SHALL be importable from `picof
 #### Scenario: Evaluation is deterministic and does not train
 - **WHEN** `evaluate(model, data)` is called twice in a row on the same trained model
 - **THEN** it SHALL return the same accuracy both times, and the model's parameters SHALL be unchanged
+
+#### Scenario: Predicting from a prepared picture
+- **WHEN** a student calls `predict(model, pic)` with a grayscale picture of the model's image size
+- **THEN** the function SHALL return the same class name as `predict(model, picture_to_array(pic))`
+
+#### Scenario: A picture of the wrong size is rejected, not resized
+- **WHEN** a student calls `predict(model, pic)` with a grayscale 200×200 picture on a model trained on 28×28 images
+- **THEN** the system SHALL raise the model's shape error, and SHALL NOT crop or resize the picture
+
+#### Scenario: A color picture is rejected with guidance
+- **WHEN** a student calls `predict(model, pic)` with a picture that is not grayscale
+- **THEN** the system SHALL raise the same error `picture_to_array()` raises for it
 
 ### Requirement: Model-agnostic generate()
 `generate(model, n)` SHALL work on any model that has a sampling capability and SHALL return `n` newly sampled images as a `uint8` array in the model's image shape. It SHALL raise an explicit, named error for a model without that capability, stating the required capability rather than failing inside internals.
