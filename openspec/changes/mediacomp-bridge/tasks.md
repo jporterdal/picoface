@@ -57,7 +57,7 @@
 - [x] 3.7 Make `predict()` accept a picture: if the input is a picture, convert it with the shared converter at the placeholder comment ahead of `_check_single_image()` (see 3.11), so the image-array checks run on the result; never crop or resize it. Verify: tests for the three new `model-interface` scenarios (same result as passing the array; a 200×200 picture raises the model's shape error; a colour picture raises the grayscale error), and all existing `predict()` tests still pass.
 - [x] 3.8 End-to-end test on a trained model. Train a classifier briefly on a small stub dataset (no mediaComp). Draw a dark filled circle off-centre on a large white fake picture, then run it through `crop_and_center` → `scale_down` → `predict`. Repeat with a dark-blue circle, converting to grayscale (channel mean) first in one run and last, just before `predict`, in another. Verify: the test runs in the normal suite within its time budget, both grayscale orders predict the same class, and it predicts `circle` (or, if the stub classes don't include a circle, the pipeline produces an image of the model's shape that `predict` accepts; document which).
 - [x] 3.9 Add `tests/test_pictures_mediacomp.py`, an optional test against the real PyPI mediaComp (design.md Decision 1). At the top: `try: import mediaComp` / `except Exception: pytest.skip(..., allow_module_level=True)`. This catches `OSError` from sounddevice without PortAudio as well as `ImportError`. Using real `makeEmptyPicture`, `addOvalFilled`, and `makePicture`, without ever calling `show()`, run the 3.3–3.7 round trips and the `crop_and_center` → `scale_down` → `predict` pipeline, and check that `getRed(getPixelAt(...))` works on every returned picture. Do not add mediaComp to `dev` extras. The real-mediaComp environment for this machine already exists (design.md Decision 1): run the module with `~/.venvs/picoface-mediacomp/run python -m pytest tests/test_pictures_mediacomp.py`. Once `picoface.pictures` exists, the editable picoface install there picks it up. Verify: under that wrapper, the module runs (not skipped) and passes; in the project's own `venv`, the module is reported as skipped, not errored.
-- [ ] 3.10 Manual check with the real mediaComp on Windows, covering what automated tests can't (`show()` needs a display). In Thonny on Windows, install `mediaComp` and picoface through Tools → Manage packages, then:
+- [x] 3.10 Manual check with the real mediaComp on Windows, covering what automated tests can't (`show()` needs a display). In Thonny on Windows, install `mediaComp` and picoface through Tools → Manage packages, then:
   - draw a circle with `makeEmptyPicture` and `addOvalFilled`, convert it to grayscale with a pixel loop, then `crop_and_center` → `scale_down` → `predict` using a model trained on the new default export;
   - `save_images(generate(vae, 8), ...)` then `makePicture(path)`, `show(...)`, and `pictureTool(...)`.
 
@@ -66,7 +66,7 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 Add a "Using picoface with mediaComp" section to `README.md`:
+- [x] 4.1 Add a "Using picoface with mediaComp" section to `README.md`:
   - the draw → grayscale (the student's own loop) → `crop_and_center` → `scale_down` → `predict` walkthrough, noting that the grayscale step can come anywhere before `predict`;
   - `save_images` → `makePicture` → `show`;
   - why each step exists (size, framing, dark on light), and that a wrong prediction on a drawing is something to investigate, not a bug;
@@ -75,10 +75,10 @@
 
   Verify: every code line in the section runs in 3.9's optional real-mediaComp test, except `show()` and `pictureTool()`, which are covered by 3.10's manual check; the user reviews the section.
 - [x] 4.2 Update README "What to expect" from 2.2's measurements, and describe the dataset as dark figures on light backgrounds. Verify: every number in the table matches `diagnostics.md`.
-- [ ] 4.3 Update `openspec/ROADMAP.md`:
+- [x] 4.3 Update `openspec/ROADMAP.md`:
   - the mediaComp integration (the `mediacomp-bridge` capability, duck typing with no mediaComp dependency) under Capabilities and Key Design Decisions;
   - the polarity flip in the Dataset Forge description;
   - a "Potential future change" entry: replace zero padding in the convolution layers (replicate padding preferred), not needed per this change's spike (design.md Decision 9), plus the `activation_maximize` blur outcome from 2.3.
 
   Verify: the user reviews the ROADMAP diff.
-- [ ] 4.4 Final check: run `pytest` (full suite, Forge included) and `openspec validate mediacomp-bridge --strict`. Verify: both pass.
+- [x] 4.4 Final check: run `pytest` (full suite, Forge included) and `openspec validate mediacomp-bridge --strict`. Verify: both pass.
