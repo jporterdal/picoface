@@ -182,6 +182,13 @@ An `/opsx:explore` session scoped this phase's five original pieces down to thre
 ## Open Questions
 
 - Whether `build_classifier_from_shape()` should reject channel counts other than 1 or 3 — **open, from `dataset-validation`'s audit:** datasets and `predict()` accept only grayscale (1) or RGB (3) images, but `build_classifier_from_shape()` still builds a model for any channel count, and such a model can never be trained or used. Left alone there because that change's scope excluded `build_classifier_from_shape()` (`dataset-validation/design.md`, Non-Goals; `audit.md`).
+- Effective versus nominal latent dimension — **measured, recommendation open:**
+  - **Finding.** `latent-active-units` counted the VAE's active latent units (Burda et al., 2016). Every dimension is active at every nominal size from 8 to 192, at thresholds 0.001, 0.01 and 0.1, on 3 seeds and at 3× the default epochs. None collapses to the prior.
+  - **Why.** The learned decoder noise σ² (about 0.003–0.0045 at 128 dimensions) sits below the variance of hundreds of pixel-space directions, so the linear-VAE theory predicts no pruning in this range.
+  - **Structure.** μ's variance is concentrated in 10–45 directions spread across all the axes, and it is wider than N(0, I) along them.
+  - **Outcome and recommendation.** This is design outcome B. `LATENT_DIM` stays at 128. The recommended follow-up is on prior mismatch in `generate()`, below.
+  - See [`latent-active-units/diagnostics.md`](changes/latent-active-units/diagnostics.md), Decision.
+- Whether the Forge should measure `generate()`'s unconditional samples — **open, raised by `latent-active-units`:** that change found the region real images encode to is a concentrated, anisotropic set that is wider than N(0, I) along its main directions. `generate()` samples N(0, I), so many of its samples probably land outside that region. `classify_generated()` is unaffected, since it resamples real encoded points. The measurement would be the CNN's class distribution and confidence on samples drawn from N(0, I), compared with decoded real latents. It is the first task of the follow-up `latent-active-units` recommends. Candidate fixes, if the samples prove poor: a second-stage VAE fitted to the encoded latents (Dai & Wipf, 2019), or sampling from a Gaussian fitted to the aggregate posterior ([`latent-active-units/diagnostics.md`](changes/latent-active-units/diagnostics.md), Decision).
 
 - Exact shape taxonomy / class list — resolved in Phase 5.
 - Exact resolution and color depth — resolved in Phase 5, guided by "as small as possible while still recognizable to both a human and the classifier."

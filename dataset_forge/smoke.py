@@ -11,6 +11,14 @@ export's training split with picoface's default settings, then reports:
 - reconstruction agreement: the CNN judging the VAE's reconstructions of real
   test images, which separates "the decoder can't draw this class" from "the
   capstone samples the wrong part of the latent space";
+- the VAE's active latent units (Burda et al., 2016): per latent dimension,
+  the variance of the encoder mean across the whole test split, the mean
+  posterior variance, and the mean KL against N(0, I), sorted by the first;
+  and how many dimensions are active at several variance thresholds;
+- masked reconstruction agreement: reconstruction agreement again with the
+  inactive dimensions of each latent mean set to the prior mean (0), and
+  with the active ones set to 0 instead, which checks that "inactive" means
+  "unused by the decoder";
 - edge darkening of `activation_maximize()` images for each class and model:
   the mean of the outermost 2-pixel ring minus the mean of the 2-pixel ring
   inside it. Its blur pads with zeros (black), which on light-background data
@@ -42,6 +50,10 @@ _FIGURE_SCALE = 6
 # activation_maximize() images per class and model, each from its own random start.
 _ASCENT_STARTS = 4
 _EDGE_RING = 2
+# Variance-of-mean thresholds the active-unit count is reported at. 0.01 is
+# Burda et al.'s (2016) convention, and the one the masking check uses.
+_ACTIVE_THRESHOLDS = (0.001, 0.01, 0.1)
+_ACTIVE_THRESHOLD = 0.01
 
 
 def confusion_matrix(model, data: Dataset) -> np.ndarray:
@@ -54,25 +66,66 @@ def confusion_matrix(model, data: Dataset) -> np.ndarray:
     return matrix
 
 
-def reconstruct(vae, images: np.ndarray) -> np.ndarray:
+def reconstruct(vae, images: np.ndarray, keep: np.ndarray | None = None) -> np.ndarray:
     """The VAE's reconstruction of each image, decoded from its latent mean.
 
-    Uses the `latent_access` capability behind `classify_generated()`, which
-    has no public verb: the Forge is instructor tooling, so it may reach it.
+    `keep`, a boolean per latent dimension, sets the dimensions it leaves out
+    to the prior mean (0) before decoding. Uses the `latent_access` capability
+    behind `classify_generated()`, which has no public verb: the Forge is
+    instructor tooling, so it may reach it.
     """
     with torch.no_grad():
-        return _to_uint8_images(vae.decode(vae.encode_mu(_preprocess_images(images, vae))))
+        mu = vae.encode_mu(_preprocess_images(images, vae))
+        if keep is not None:
+            mu = mu * torch.from_numpy(keep).to(mu.dtype)
+        return _to_uint8_images(vae.decode(mu))
 
 
-def reconstruction_report(cnn, vae, data: Dataset, n: int) -> dict:
+def reconstruction_report(
+    cnn, vae, data: Dataset, n: int, keep: np.ndarray | None = None
+) -> dict:
     """Per class, the first `n` images, their reconstructions, and CNN agreement on them."""
     report = {}
     for label, name in enumerate(data.class_names):
         real = data.images[data.labels == label][:n]
-        recon = reconstruct(vae, real)
+        recon = reconstruct(vae, real, keep)
         agreement = float(np.mean([predict(cnn, image) == name for image in recon]))
         report[name] = {"real": real, "reconstructed": recon, "agreement": agreement}
     return report
+
+
+def active_units_report(vae, data: Dataset) -> dict:
+    """Per latent dimension, over all of `data`: Var(μ) across images, the mean
+    posterior variance, and the mean KL against N(0, I), sorted by Var(μ),
+    largest first; and the number of dimensions whose Var(μ) exceeds each of
+    `_ACTIVE_THRESHOLDS`.
+
+    Reads the posterior's log-variance from `_VAE.encode`, which `latent_access`
+    doesn't expose: the same instructor-tooling reach-in as `reconstruct()`.
+    """
+    vae.eval()
+    with torch.no_grad():
+        mu, logvar = vae.encode(_preprocess_images(data.images, vae))
+    mu, logvar = mu.double().numpy(), logvar.double().numpy()
+    variance = np.exp(logvar)
+    variance_of_mean = mu.var(axis=0)
+    kl = 0.5 * (mu**2 + variance - 1 - logvar)
+    order = np.argsort(-variance_of_mean, kind="stable")
+    return {
+        "latent_dim": mu.shape[1],
+        "dimension": order,
+        "variance_of_mean": variance_of_mean[order],
+        "posterior_variance": variance.mean(axis=0)[order],
+        "kl": kl.mean(axis=0)[order],
+        "active": {t: int(np.sum(variance_of_mean > t)) for t in _ACTIVE_THRESHOLDS},
+    }
+
+
+def active_mask(report: dict, threshold: float = _ACTIVE_THRESHOLD) -> np.ndarray:
+    """A boolean per latent dimension, in the model's order: is its Var(μ) above `threshold`?"""
+    mask = np.zeros(report["latent_dim"], dtype=bool)
+    mask[report["dimension"][report["variance_of_mean"] > threshold]] = True
+    return mask
 
 
 def edge_darkening(images: np.ndarray) -> float:
@@ -124,6 +177,12 @@ def smoke(out_dir: str | Path, seed: int = 0, n: int = 20, epochs: int | None = 
     cnn, vae = results["models"]["cnn"]["model"], results["models"]["vae"]["model"]
     results["classify_generated"] = classify_generated(cnn, vae, train_data, n=n)
     results["reconstruction"] = reconstruction_report(cnn, vae, test_data, n=n)
+    results["active_units"] = active_units_report(vae, test_data)
+    active = active_mask(results["active_units"])
+    results["masked_reconstruction"] = {
+        "inactive_masked": reconstruction_report(cnn, vae, test_data, n=n, keep=active),
+        "active_masked": reconstruction_report(cnn, vae, test_data, n=n, keep=~active),
+    }
     results["activation_maximize"] = activation_maximize_report(
         results["models"], train_data.class_names
     )
@@ -173,6 +232,37 @@ def format_results(results: dict) -> str:
     for name in names:
         values = " | ".join(f"{ascent[name][m]['edge_darkening']:+.1f}" for m in model_names)
         lines.append(f"| {name} | {values} |")
+
+    units, masked = results["active_units"], results["masked_reconstruction"]
+    thresholds = list(units["active"])
+    agreements = [
+        np.mean([r["agreement"] for r in report.values()])
+        for report in (recon, masked["inactive_masked"], masked["active_masked"])
+    ]
+    lines += [
+        "",
+        "VAE active latent units (Var(μ) across the whole test split above each "
+        f"threshold), and overall reconstruction agreement with the dimensions below "
+        f"{_ACTIVE_THRESHOLD} set to 0 (inactive masked) or those above it (active masked):",
+        "",
+        "| Nominal size | "
+        + " | ".join(f"Active > {t}" for t in thresholds)
+        + " | Unmasked | Inactive masked | Active masked |",
+        "|---" * (len(thresholds) + 4) + "|",
+        f"| {units['latent_dim']} | "
+        + " | ".join(str(units["active"][t]) for t in thresholds)
+        + " | "
+        + " | ".join(f"{a:.2f}" for a in agreements)
+        + " |",
+        "",
+        "VAE latent dimensions, sorted by Var(μ):",
+        "",
+        "| Rank | Dimension | Var(μ) | Mean posterior variance | Mean KL |",
+        "|---|---|---|---|---|",
+    ]
+    columns = ("dimension", "variance_of_mean", "posterior_variance", "kl")
+    for rank, (dim, var_mu, post_var, kl) in enumerate(zip(*(units[c] for c in columns))):
+        lines.append(f"| {rank} | {dim} | {var_mu:.4g} | {post_var:.4g} | {kl:.4g} |")
     return "\n".join(lines)
 
 
