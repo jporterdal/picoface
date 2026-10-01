@@ -23,5 +23,6 @@ Export validation fails the default config: mean-brightness-only accuracy is 0.2
 
 - `dataset_forge/validate.py`: a background-shade feature, the renamed gated check and its report field, and mean brightness moved to the reported baselines.
 - Tests: `dataset_forge/tests/test_validate.py` and `dataset_forge/tests/test_cli.py`. Their failing-export fixtures leak only through area, so they no longer fail and need a class-dependent background instead.
+- Two tests that hard-code the old default config and fail on the current one, unrelated to the gate: `dataset_forge/tests/test_render.py` (full-circle rotation, background spread) and `tests/test_real_dataset.py` (image counts). Fixed here so the full suite passes.
 - `dataset_forge/README.md`: the "Validation" section's gated and reported lists.
 - Unchanged: rendering, the config and `configs/default.json`, the export format, and picoface's stub-dataset brightness test (`tests/test_stub_data.py`) with its data-contract requirement, which are about the stub generator, not Forge exports.

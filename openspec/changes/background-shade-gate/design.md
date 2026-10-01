@@ -28,7 +28,7 @@ At the test suite's reduced counts (120 / 60 per class) mean brightness happens 
 
 ### 1. The background shade is the mean of the 1-pixel border
 
-A new feature function, `background_shade(images)`, averages each image's outermost rows and columns (108 pixels at 28×28). The border is ink-free by construction, so this is the image's sampled background plus averaged noise. With σ = 6 noise, the result is within about 0.6 gray levels of the true background.
+A new feature function, `background_shade(images)`, averages each image's outermost rows and columns (108 pixels at 28×28). The border is ink-free by construction, so this is the image's sampled background plus averaged noise. With σ = 6 noise, its standard deviation around the true background is about 0.6 gray levels. Near 255, clipped noise pulls it down by up to about 2 levels more. Neither depends on the class.
 
 **Alternatives considered:**
 - *A high percentile, such as the 95th pixel value.* This only measures background by assumption: a figure covering most of the image pulls it down, which would leak area back in. It scored about the same here (0.151), but it isn't clean by construction.

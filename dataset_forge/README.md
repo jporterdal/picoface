@@ -62,12 +62,15 @@ Gated checks:
 - both splits load with `load_dataset()` with the configured shape and classes;
 - each split has exactly the configured number of images per class;
 - no image appears in both splits;
-- a classifier using only each image's mean brightness scores below chance + 0.1.
+- a classifier using only each image's background shade (the mean of its
+  outermost rows and columns, where no figure ever reaches) scores below
+  chance + 0.1. This catches shades that depend on the class.
 
-Also reported, but not gated: a classifier using only each image's ink
-fraction (how much of it the figure covers). Real shapes differ in area, so
-this scores well above chance. A model that has learned shapes should beat it
-by a wide margin.
+Also reported, but not gated: classifiers using only each image's ink
+fraction (how much of it the figure covers) and only its mean brightness.
+Real shapes differ in area, so ink fraction scores well above chance. Mean
+brightness tracks area too, more so the narrower `background_range` is. A
+model that has learned shapes should beat both by a wide margin.
 
 ## Look at the shapes
 

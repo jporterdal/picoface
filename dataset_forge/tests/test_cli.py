@@ -10,6 +10,7 @@ import sys  # noqa: E402
 
 from dataset_forge.export import PACKAGE_DIR, export  # noqa: E402
 from dataset_forge.tests._configs import default_config, tiny_config  # noqa: E402
+from dataset_forge.tests._exports import offset_class  # noqa: E402
 
 REPO_ROOT = PACKAGE_DIR.parent
 
@@ -22,7 +23,7 @@ def _run(*args):
 
 def test_export_command_writes_a_validated_export(tmp_path):
     # All seven classes: a few classes at a handful of images each is too
-    # small a sample for the mean-brightness check to pass reliably.
+    # small a sample for the background check to pass reliably.
     config_path = tmp_path / "config.json"
     default_config(train_per_class=120, test_per_class=60).save(config_path)
     out_dir = tmp_path / "out"
@@ -48,20 +49,14 @@ def test_export_command_rejects_an_unknown_class_before_writing(tmp_path):
 
 
 def test_validate_command_exits_non_zero_on_a_failed_check(tmp_path):
-    config = tiny_config(
-        class_names=("circle", "ring"),
-        train_per_class=40,
-        test_per_class=20,
-        background_range=(250, 250),
-        min_contrast=210,
-        noise_sigma=0.0,
-    )
-    out_dir = export(config, seed=0, out_dir=tmp_path)
+    out_dir = export(tiny_config(background_range=(130, 150)), seed=0, out_dir=tmp_path)
+    offset_class(out_dir, label=1, amount=40)
+    offset_class(out_dir, label=2, amount=80)
 
     result = _run("-m", "dataset_forge.validate", str(out_dir))
 
     assert result.returncode == 1
-    assert "[FAIL] mean_brightness" in result.stdout
+    assert "[FAIL] background" in result.stdout
 
 
 def test_the_forge_tests_skip_cleanly_without_pillow():

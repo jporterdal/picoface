@@ -10,6 +10,7 @@ import numpy as np  # noqa: E402
 from dataset_forge.export import export, read_manifest  # noqa: E402
 from dataset_forge.render import render_coverage, sample_params, shade  # noqa: E402
 from dataset_forge.tests._configs import default_config, tiny_config  # noqa: E402
+from dataset_forge.tests._exports import load_split, offset_class, rewrite_split  # noqa: E402
 from dataset_forge.validate import ink_fraction, validate_and_record, validate_export  # noqa: E402
 
 
@@ -20,21 +21,12 @@ def course_export(tmp_path_factory):
     return export(config, seed=0, out_dir=tmp_path_factory.mktemp("course"))
 
 
-def _rewrite(out_dir, split, images, labels):
-    np.savez_compressed(out_dir / f"{split}.npz", images=images, labels=labels)
-
-
-def _load(out_dir, split):
-    with np.load(out_dir / f"{split}.npz") as data:
-        return data["images"].copy(), data["labels"].copy()
-
-
-def test_the_course_classes_pass_with_ink_fraction_well_above_the_brightness_gate(course_export):
+def test_the_course_classes_pass_with_ink_fraction_well_above_the_background_gate(course_export):
     report = validate_export(course_export)
 
     assert report.passed, str(report)
     assert report.chance == pytest.approx(1 / 7)
-    assert report.mean_brightness_accuracy < report.chance + 0.1
+    assert report.background_accuracy < report.chance + 0.1
     # Not gated: reported only, and here clearly informative.
     assert report.ink_fraction_accuracy > report.chance + 0.1
 
@@ -46,11 +38,24 @@ def test_results_are_recorded_in_the_manifest(tmp_path):
 
     recorded = read_manifest(out_dir)["validation"]
     assert recorded["passed"] == report.passed
-    assert set(recorded["checks"]) == {"loads", "balanced", "disjoint", "mean_brightness"}
+    assert set(recorded["checks"]) == {"loads", "balanced", "disjoint", "background"}
+    assert recorded["background_accuracy"] == report.background_accuracy
     assert recorded["ink_fraction_accuracy"] == report.ink_fraction_accuracy
 
 
-def test_a_brightness_separable_export_fails_the_brightness_check(tmp_path):
+def test_a_class_dependent_background_fails_the_background_check(tmp_path):
+    # A narrow background range, then each class lightened by a different amount.
+    out_dir = export(tiny_config(background_range=(130, 150)), seed=0, out_dir=tmp_path)
+    offset_class(out_dir, label=1, amount=40)
+    offset_class(out_dir, label=2, amount=80)
+
+    report = validate_export(out_dir)
+
+    assert not report.passed
+    assert report.failed_checks == ["background"]
+
+
+def test_brightness_that_follows_figure_area_is_reported_not_gated(tmp_path):
     # Fixed shades and no noise: a filled circle is simply darker than a ring.
     config = tiny_config(
         class_names=("circle", "ring"),
@@ -64,25 +69,25 @@ def test_a_brightness_separable_export_fails_the_brightness_check(tmp_path):
 
     report = validate_export(out_dir)
 
-    assert not report.passed
-    assert report.failed_checks == ["mean_brightness"]
+    assert report.passed, str(report)
+    assert report.mean_brightness_accuracy > report.chance + 0.1
 
 
 def test_an_image_in_both_splits_fails_the_disjointness_check(tmp_path):
     out_dir = export(tiny_config(), seed=0, out_dir=tmp_path)
-    train_images, train_labels = _load(out_dir, "train")
-    test_images, _ = _load(out_dir, "test")
+    train_images, train_labels = load_split(out_dir, "train")
+    test_images, _ = load_split(out_dir, "test")
     train_images[0] = test_images[0]
-    _rewrite(out_dir, "train", train_images, train_labels)
+    rewrite_split(out_dir, "train", train_images, train_labels)
 
     assert "disjoint" in validate_export(out_dir).failed_checks
 
 
 def test_a_class_missing_from_a_split_fails_the_balance_check(tmp_path):
     out_dir = export(tiny_config(), seed=0, out_dir=tmp_path)
-    images, labels = _load(out_dir, "test")
+    images, labels = load_split(out_dir, "test")
     keep = labels != 2
-    _rewrite(out_dir, "test", images[keep], labels[keep])
+    rewrite_split(out_dir, "test", images[keep], labels[keep])
 
     report = validate_export(out_dir)
 
@@ -92,8 +97,8 @@ def test_a_class_missing_from_a_split_fails_the_balance_check(tmp_path):
 
 def test_a_bundle_with_the_wrong_image_shape_fails_the_load_check(tmp_path):
     out_dir = export(tiny_config(), seed=0, out_dir=tmp_path)
-    images, labels = _load(out_dir, "train")
-    _rewrite(out_dir, "train", images[:, :20, :20], labels)
+    images, labels = load_split(out_dir, "train")
+    rewrite_split(out_dir, "train", images[:, :20, :20], labels)
 
     assert validate_export(out_dir).failed_checks == ["loads"]
 

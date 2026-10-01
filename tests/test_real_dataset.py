@@ -25,6 +25,8 @@ import torch
 
 matplotlib.use("Agg")
 
+from dataset_forge.config import ForgeConfig
+from dataset_forge.export import DEFAULT_CONFIG
 from picoface.classifier import build_classifier
 from picoface.classifier import evaluate as classifier_evaluate
 from picoface.classifier import train as classifier_train
@@ -37,9 +39,10 @@ _CPU_TIME_BUDGET_SECONDS = 300.0
 
 def test_real_dataset_fixture_loads_expected_shape_and_classes(real_dataset):
     train_data, test_data = real_dataset
+    config = ForgeConfig.load(DEFAULT_CONFIG)
 
-    assert train_data.images.shape == (14000, 28, 28, 1)
-    assert test_data.images.shape == (1400, 28, 28, 1)
+    assert train_data.images.shape == (config.train_per_class * 7, 28, 28, 1)
+    assert test_data.images.shape == (config.test_per_class * 7, 28, 28, 1)
     assert len(train_data.class_names) == len(test_data.class_names) == 7
     assert train_data.class_names == test_data.class_names
 

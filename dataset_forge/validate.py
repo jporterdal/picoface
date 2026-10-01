@@ -5,9 +5,10 @@
 Reads only the export folder, through picoface's own `load_dataset()`, so it
 checks exactly what students will receive. Gated checks (any failure fails
 the export): both bundles load with the manifest's shape and classes, each is
-class-balanced, the two are disjoint, and mean brightness alone does not
-tell the classes apart. Reported but not gated: how well ink fraction alone
-does — real shapes differ in area, and shape-aware models should beat it.
+class-balanced, the two are disjoint, and the background shade alone does
+not tell the classes apart. Reported but not gated: how well mean brightness
+and ink fraction alone do — real shapes differ in area, both track it, and
+shape-aware models should beat them.
 """
 
 import argparse
@@ -24,15 +25,16 @@ from picoface.datasets import Dataset, DatasetWarning, load_dataset
 
 # A single-statistic classifier may beat chance by less than this; the same
 # margin the stub dataset's brightness test uses (tests/test_stub_data.py).
-BRIGHTNESS_MARGIN = 0.1
+SHADE_MARGIN = 0.1
 
 
 @dataclass
 class ValidationReport:
-    """Each gated check's outcome and message, plus the two baselines."""
+    """Each gated check's outcome and message, the gated accuracy, and the two baselines."""
 
     checks: dict[str, tuple[bool, str]] = field(default_factory=dict)
     chance: float | None = None
+    background_accuracy: float | None = None
     mean_brightness_accuracy: float | None = None
     ink_fraction_accuracy: float | None = None
 
@@ -51,6 +53,7 @@ class ValidationReport:
                 name: {"passed": ok, "detail": msg} for name, (ok, msg) in self.checks.items()
             },
             "chance": self.chance,
+            "background_accuracy": self.background_accuracy,
             "mean_brightness_accuracy": self.mean_brightness_accuracy,
             "ink_fraction_accuracy": self.ink_fraction_accuracy,
         }
@@ -60,16 +63,30 @@ class ValidationReport:
         for name, (ok, msg) in self.checks.items():
             lines.append(f"  [{'ok' if ok else 'FAIL'}] {name}: {msg}")
         if self.chance is not None:
-            lines.append(f"  chance:                       {self.chance:.3f}")
+            lines.append(f"  chance:                          {self.chance:.3f}")
+        if self.background_accuracy is not None:
+            lines.append(f"  background-only (gated):         {self.background_accuracy:.3f}")
         if self.mean_brightness_accuracy is not None:
-            lines.append(f"  mean-brightness-only (gated): {self.mean_brightness_accuracy:.3f}")
+            lines.append(f"  mean-brightness-only (baseline): {self.mean_brightness_accuracy:.3f}")
         if self.ink_fraction_accuracy is not None:
-            lines.append(f"  ink-fraction-only (baseline): {self.ink_fraction_accuracy:.3f}")
+            lines.append(f"  ink-fraction-only (baseline):    {self.ink_fraction_accuracy:.3f}")
         return "\n".join(lines)
 
 
 def mean_brightness(images: np.ndarray) -> np.ndarray:
     return images.reshape(len(images), -1).mean(axis=1)
+
+
+def background_shade(images: np.ndarray) -> np.ndarray:
+    """Each image's background shade: the mean of its outermost rows and columns.
+
+    Rendering keeps every figure `ForgeConfig.clearance` (over one pixel) from
+    each edge, so the border holds only background and noise, whatever the
+    figure's class or area.
+    """
+    pixels = images.astype(np.float64)
+    border = [pixels[:, [0, -1]], pixels[:, 1:-1, [0, -1]]]
+    return np.concatenate([edge.reshape(len(images), -1) for edge in border], axis=1).mean(axis=1)
 
 
 def ink_fraction(images: np.ndarray) -> np.ndarray:
@@ -155,17 +172,20 @@ def validate_export(out_dir: str | Path) -> ValidationReport:
 
     train, test = datasets["train"], datasets["test"]
     report.chance = 1 / len(train.class_names)
+    report.background_accuracy = nearest_class_mean_accuracy(
+        background_shade(train.images), train, background_shade(test.images), test
+    )
     report.mean_brightness_accuracy = nearest_class_mean_accuracy(
         mean_brightness(train.images), train, mean_brightness(test.images), test
     )
     report.ink_fraction_accuracy = nearest_class_mean_accuracy(
         ink_fraction(train.images), train, ink_fraction(test.images), test
     )
-    limit = report.chance + BRIGHTNESS_MARGIN
-    report.checks["mean_brightness"] = (
-        report.mean_brightness_accuracy < limit,
-        f"mean-brightness-only accuracy {report.mean_brightness_accuracy:.3f} "
-        f"must be below chance + {BRIGHTNESS_MARGIN} = {limit:.3f}",
+    limit = report.chance + SHADE_MARGIN
+    report.checks["background"] = (
+        report.background_accuracy < limit,
+        f"background-only accuracy {report.background_accuracy:.3f} "
+        f"must be below chance + {SHADE_MARGIN} = {limit:.3f}",
     )
     return report
 

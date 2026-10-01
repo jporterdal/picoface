@@ -15,9 +15,9 @@ from dataset_forge.tests._configs import default_config  # noqa: E402
 CONFIG = default_config()
 
 
-def _draws(class_name: str, n: int = 200, seed: int = 0):
+def _draws(class_name: str, n: int = 200, seed: int = 0, config=CONFIG):
     rng = np.random.default_rng(seed)
-    return [sample_params(rng, CONFIG, class_name) for _ in range(n)]
+    return [sample_params(rng, config, class_name) for _ in range(n)]
 
 
 @pytest.mark.parametrize("class_name", list(SHAPES))
@@ -53,7 +53,8 @@ def test_foreground_is_always_darker_by_at_least_the_minimum_contrast():
 
 
 def test_variation_covers_rotation_size_position_and_shades():
-    draws = _draws("square", n=500)
+    # Full-circle rotation, whatever the default config's range.
+    draws = _draws("square", n=500, config=replace(CONFIG, rotation_range=180.0))
 
     def spread(values):
         return max(values) - min(values)
@@ -63,7 +64,8 @@ def test_variation_covers_rotation_size_position_and_shades():
     assert spread([p.placement.radius for p in draws]) > 0.75 * radius_range
     assert spread([p.placement.cx for p in draws]) > 2
     assert spread([p.placement.cy for p in draws]) > 2
-    assert spread([p.background for p in draws]) > 100
+    low, high = CONFIG.background_range
+    assert spread([p.background for p in draws]) > 0.75 * (high - low)
 
 
 def _angles(config, n: int = 2000):
