@@ -127,7 +127,7 @@ Same seed → same initial weights requires the parameterized layers to be **cre
 - Autoencoder: conv1, conv2, to_latent, decoder.
 - Classifier: conv1, conv2, fc1, fc2.
 
-Comparing weights simply as lists also requires `parameters()` to come out in that same order. The log-variances are zero-initialized, so where they are created doesn't matter for random numbers, but they stay last.
+Comparing weights simply as lists also requires `parameters()` to come out in that same order. The log-variances are zero-initialized, so where they are created doesn't matter for random numbers. They were direct parameters of `_VAE`, and `parameters()` lists a module's own parameters before its children's, so they came first. `_LearnedTaskWeights` is therefore registered as `_VAE`'s first child, which keeps them first.
 
 `_validate_decode_shape` runs `forward()`, and the VAE's `forward()` draws random noise in `_reparameterize`. It must stay in the builder at the same point, so later draws line up.
 
@@ -138,6 +138,18 @@ A temporary, uncommitted comparison script records the following on the current 
 - `sample()` output for the VAE.
 
 It covers two input shapes, the stub shape (16×16×3) and one other valid shape (for example 32×32×1). It also checks that each builder raises the same error type with the same message for an invalid shape. The comparison requires exact equality, not a tolerance. The same operations run in the same order, and `Sequential` adds no arithmetic.
+
+### 7. The before/after test run uses the fast suite; the full suite is deferred
+
+A plain `pytest` run collects `tests/test_real_dataset.py` and `dataset_forge/tests/`. Those build real Dataset Forge exports and fully train the classifier and VAE on CPU. The baseline run of the full suite went past 40 minutes without finishing. So this change's before/after check runs only the fast suite, which uses stub data:
+
+```
+pytest tests/ --ignore=tests/test_real_dataset.py
+```
+
+That is enough evidence for a refactor that doesn't change behaviour. The Decision 6 comparison already shows exact equality of weights, gradients, losses, metrics, samples, and error messages. The fast suite then checks that every caller still works. The real-dataset tests check model quality and time budgets, and those depend only on behaviour that Decision 6 proves unchanged.
+
+More readability refactors may follow, for example on `linkage_internals.py`. The full suite should be run once after that series, not once per change.
 
 ## Risks / Trade-offs
 
