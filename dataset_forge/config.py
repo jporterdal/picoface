@@ -1,8 +1,11 @@
 """The settings one export is rendered from, loaded from and saved as JSON."""
 
 import json
+import math
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+
+from dataset_forge.rotation import ROTATION_DISTRIBUTIONS
 
 # Figures keep at least this many output pixels clear of every image edge,
 # so no anti-aliased ink ever lands in the outermost rows and columns.
@@ -41,6 +44,11 @@ class ForgeConfig:
     min_contrast: int = 96
     # Standard deviation of per-pixel Gaussian noise, in gray levels.
     noise_sigma: float = 6.0
+    # Each figure is rotated up to this many degrees either side of upright (0-180).
+    rotation_range: float = 180.0
+    # How rotations are drawn within that range: "uniform", or "normal" around
+    # upright with a standard deviation of half the range, redrawn past its edges.
+    rotation_distribution: str = "uniform"
     # Figures are drawn at this many times the output resolution per side,
     # then averaged down, which anti-aliases their edges.
     supersample: int = 4
@@ -69,6 +77,15 @@ class ForgeConfig:
             )
         if not 0 <= self.radius_jitter < 1 or not 0 <= self.stroke_jitter < 1:
             raise ValueError("radius_jitter and stroke_jitter must be in [0, 1).")
+        if not 0 <= self.rotation_range <= 180:
+            raise ValueError(
+                f"rotation_range must be between 0 and 180 degrees, got {self.rotation_range}."
+            )
+        if self.rotation_distribution not in ROTATION_DISTRIBUTIONS:
+            raise ValueError(
+                f"unknown rotation_distribution {self.rotation_distribution!r}; "
+                f"available distributions: {list(ROTATION_DISTRIBUTIONS)!r}."
+            )
         half_side = min(self.height, self.width) / 2
         if self.max_radius + self.clearance > half_side:
             raise ValueError(
@@ -80,6 +97,10 @@ class ForgeConfig:
     def nominal_radius(self) -> float:
         """The unjittered circumscribed radius, in output pixels."""
         return self.radius_fraction * min(self.height, self.width) / 2
+
+    @property
+    def rotation_range_radians(self) -> float:
+        return math.radians(self.rotation_range)
 
     @property
     def max_radius(self) -> float:

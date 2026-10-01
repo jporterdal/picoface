@@ -8,13 +8,13 @@ Three separate stages, so draw functions never see shades or noise:
 3. `shade()` maps coverage to gray between the two shades and adds noise.
 """
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 from dataset_forge.config import ForgeConfig
+from dataset_forge.rotation import ROTATION_DISTRIBUTIONS
 from dataset_forge.shapes import Placement, draw_figure
 
 
@@ -32,7 +32,8 @@ def sample_params(rng: np.random.Generator, config: ForgeConfig, class_name: str
     """Draw one image's variation within the ranges `config` allows.
 
     The centre is kept far enough from every edge that the figure's whole
-    circumscribed circle, plus `config.clearance`, lies inside the image.
+    circumscribed circle, plus `config.clearance`, lies inside the image, so
+    no rotation can clip it.
     """
     radius = config.nominal_radius
     radius *= rng.uniform(1 - config.radius_jitter, 1 + config.radius_jitter)
@@ -42,7 +43,9 @@ def sample_params(rng: np.random.Generator, config: ForgeConfig, class_name: str
     room = radius + config.clearance
     cx = rng.uniform(room, config.width - room)
     cy = rng.uniform(room, config.height - room)
-    angle = rng.uniform(0, 2 * math.pi)
+    angle = ROTATION_DISTRIBUTIONS[config.rotation_distribution](
+        rng.uniform(), config.rotation_range_radians
+    )
 
     low, high = config.background_range
     background = rng.uniform(low, high)

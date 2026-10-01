@@ -107,8 +107,9 @@ It is a measurement, not a test: nothing passes or fails.
 1. In `shapes.py`, write a draw function that paints the figure at 255 on the
    0 canvas it is given. It must stay inside the circle of
    `placement.radius` around `(placement.cx, placement.cy)`, rotated by
-   `placement.angle` (`placement.point(u, v)` does the rotation). Use `CUT` (0)
-   to cut holes. Shades, noise, placement, and anti-aliasing are handled for
+   `placement.angle` (`placement.point(u, v)` does the rotation). Draw it
+   upright at angle 0, as the other classes are, so rotation settings mean
+   the same thing for it. Use `CUT` (0) to cut holes. Shades, noise, placement, and anti-aliasing are handled for
    you.
 2. Register it in `SHAPES` under its class name.
 3. Add the name to a config's `class_names`. Order sets the label numbers.
@@ -131,6 +132,24 @@ The main ones:
   look like dark drawings on light paper, as mediaComp draws by default.
   Every class shares this polarity, `negative_smiley` included.
 - `noise_sigma`: pixel noise.
+- `rotation_range`, `rotation_distribution`: how far figures tilt. Each
+  figure is rotated up to `rotation_range` degrees (0–180) either side of
+  upright, which is angle 0 for every class: square sides level, the
+  triangle's and star's top point straight up, a smiley's eyes above its
+  mouth. `"uniform"` draws angles evenly across the range; `"normal"` clusters
+  them around upright, with a standard deviation of half the range, and draws
+  again whenever an angle falls past the range's edge. The defaults, 180 and
+  `"uniform"`, rotate figures evenly over the full circle. A range of 0 keeps
+  every figure upright.
+
+  One range applies to every class, whatever its symmetry. A square looks the
+  same every 90° and a smiley only every 360°, so ±30° reaches most of a
+  square's distinct poses but only a sixth of a smiley's.
+
+  Since these settings were added, a seed renders different images than it
+  did before, even at the defaults: every angle has moved by 180°. To
+  recreate an older export exactly, check out the git commit recorded in its
+  manifest.
 
 ## Tests
 

@@ -66,6 +66,50 @@ def test_variation_covers_rotation_size_position_and_shades():
     assert spread([p.background for p in draws]) > 100
 
 
+def _angles(config, n: int = 2000):
+    rng = np.random.default_rng(0)
+    return np.array([sample_params(rng, config, "square").placement.angle for _ in range(n)])
+
+
+@pytest.mark.parametrize("distribution", ["uniform", "normal"])
+def test_a_rotation_range_of_zero_renders_every_figure_upright(distribution):
+    config = default_config(rotation_range=0.0, rotation_distribution=distribution)
+
+    assert not _angles(config).any()
+
+
+@pytest.mark.parametrize("distribution", ["uniform", "normal"])
+def test_rotations_stay_within_the_range(distribution):
+    config = default_config(rotation_range=30.0, rotation_distribution=distribution)
+
+    assert np.abs(_angles(config)).max() <= math.radians(30)
+
+
+def test_uniform_rotations_reach_both_ends_of_the_range():
+    angles = np.degrees(_angles(default_config(rotation_range=30.0)))
+
+    assert angles.min() < -29 and angles.max() > 29
+
+
+def test_normal_rotations_cluster_around_upright():
+    config = default_config(rotation_range=30.0, rotation_distribution="normal")
+
+    within = np.mean(np.abs(np.degrees(_angles(config))) <= 15)
+    # 68.3% of a normal lies within one standard deviation, of the 95.4% kept within two.
+    assert within == pytest.approx(0.6827 / 0.9545, abs=0.03)
+
+
+def test_the_distribution_never_changes_the_shades():
+    # Each angle takes exactly one draw, so everything drawn after it lines up.
+    def shades(distribution):
+        config = default_config(rotation_range=30.0, rotation_distribution=distribution)
+        rng = np.random.default_rng(0)
+        draws = [sample_params(rng, config, "star") for _ in range(50)]
+        return [(p.background, p.foreground) for p in draws]
+
+    assert shades("uniform") == shades("normal")
+
+
 def test_images_are_28x28_grayscale_uint8_and_never_repeat():
     rng = np.random.default_rng(0)
 

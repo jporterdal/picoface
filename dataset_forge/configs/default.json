@@ -12,18 +12,20 @@
   "height": 28,
   "width": 28,
   "channels": 1,
-  "train_per_class": 2000,
-  "test_per_class": 200,
+  "train_per_class": 8000,
+  "test_per_class": 800,
   "radius_fraction": 0.65,
   "radius_jitter": 0.15,
   "stroke_fraction": 0.18,
   "stroke_jitter": 0.15,
   "min_stroke": 1.0,
   "background_range": [
-    96,
+    200,
     255
   ],
-  "min_contrast": 96,
+  "min_contrast": 100,
   "noise_sigma": 6.0,
+  "rotation_range": 180.0,
+  "rotation_distribution": "uniform",
   "supersample": 4
 }

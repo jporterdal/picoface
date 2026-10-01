@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("PIL")
 
 import json  # noqa: E402
+import math  # noqa: E402
 
 from dataset_forge.config import ForgeConfig  # noqa: E402
 from dataset_forge.export import DEFAULT_CONFIG  # noqa: E402
@@ -47,11 +48,22 @@ def test_default_config_is_the_seven_class_28px_grayscale_course_set():
         (dict(background_range=(50, 200), min_contrast=96), "background_range.*min_contrast"),
         (dict(radius_jitter=1.0), "jitter"),
         (dict(radius_fraction=1.0), "does not fit"),
+        (dict(rotation_range=-1.0), "rotation_range"),
+        (dict(rotation_range=181.0), "rotation_range"),
+        (dict(rotation_distribution="gaussian"), "gaussian.*'uniform', 'normal'"),
     ],
 )
 def test_invalid_configs_are_rejected_with_a_clear_message(overrides, message):
     with pytest.raises(ValueError, match=message):
         tiny_config(**overrides)
+
+
+def test_omitted_rotation_settings_default_to_the_full_circle_evenly():
+    config = ForgeConfig.from_dict({"name": "x", "class_names": ["circle"]})
+
+    assert config.rotation_range == 180
+    assert config.rotation_distribution == "uniform"
+    assert config.rotation_range_radians == pytest.approx(math.pi)
 
 
 def test_unknown_config_keys_are_rejected(tmp_path):
