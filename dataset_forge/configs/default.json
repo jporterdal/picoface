@@ -25,7 +25,7 @@
   ],
   "min_contrast": 100,
   "noise_sigma": 6.0,
-  "rotation_range": 180.0,
+  "rotation_range": 30.0,
   "rotation_distribution": "uniform",
   "supersample": 4
 }
