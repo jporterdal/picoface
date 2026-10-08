@@ -37,7 +37,7 @@ The configuration SHALL set each figure's rotation with two settings:
 
 Upright SHALL mean the same pose for every class: square sides aligned with the image edges, the triangle's and star's top point straight up, and the smiley's eyes above its mouth. The same range and distribution SHALL apply to every class.
 
-When the configuration omits them, the rotation range SHALL default to 180 and the distribution to `uniform`, so that rotations cover the full circle evenly. The default configuration SHALL list both settings explicitly with these values.
+When the configuration omits them, the rotation range SHALL default to 180 and the distribution to `uniform`, so that rotations cover the full circle evenly. The default configuration SHALL list both settings explicitly.
 
 #### Scenario: A range of zero renders every figure upright
 - **WHEN** the rotation range is 0, with either distribution

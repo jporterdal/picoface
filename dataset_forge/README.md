@@ -141,9 +141,10 @@ The main ones:
   triangle's and star's top point straight up, a smiley's eyes above its
   mouth. `"uniform"` draws angles evenly across the range; `"normal"` clusters
   them around upright, with a standard deviation of half the range, and draws
-  again whenever an angle falls past the range's edge. The defaults, 180 and
-  `"uniform"`, rotate figures evenly over the full circle. A range of 0 keeps
-  every figure upright.
+  again whenever an angle falls past the range's edge. When omitted, they
+  default to 180 and `"uniform"`, which rotate figures evenly over the full
+  circle; the shipped `configs/default.json` uses a range of 30. A range of 0
+  keeps every figure upright.
 
   One range applies to every class, whatever its symmetry. A square looks the
   same every 90° and a smiley only every 360°, so ±30° reaches most of a
